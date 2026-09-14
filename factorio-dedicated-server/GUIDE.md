@@ -29,7 +29,7 @@ The app downloads Wube’s **free Linux headless package** (not SteamCMD), backs
 1. **Settings → Apps → App store → ⋮ → Repositories** → add:
 
    ```text
-   https://github.com/esper256/hassio-addons
+   https://github.com/esper256/ha-gameservers
    ```
 
 2. Install **Factorio Dedicated Server**.

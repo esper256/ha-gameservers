@@ -27,7 +27,7 @@ SteamCMD keeps the build current, the world is backed up automatically, and **Op
 1. **Settings → Apps → App store → ⋮ → Repositories** → add:
 
    ```text
-   https://github.com/esper256/hassio-addons
+   https://github.com/esper256/ha-gameservers
    ```
 
 2. Install **Necesse Dedicated Server**.

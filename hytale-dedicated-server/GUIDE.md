@@ -25,7 +25,7 @@ The app uses Hypixel’s **official Linux downloader** (OAuth device-code, not S
 1. **Settings → Apps → App store → ⋮ → Repositories** → add:
 
    ```text
-   https://github.com/esper256/hassio-addons
+   https://github.com/esper256/ha-gameservers
    ```
 
 2. Install **Hytale Dedicated Server**.

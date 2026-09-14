@@ -81,7 +81,7 @@ LABEL \
   io.hass.type="app" \
   io.hass.version="${BUILD_VERSION}" \
   io.hass.arch="${BUILD_ARCH}" \
-  org.opencontainers.image.source="https://github.com/esper256/hassio-addons"
+  org.opencontainers.image.source="https://github.com/esper256/ha-gameservers"
 
 # 8099 = HA Ingress convention (not published on the host by default).
 # 7778/udp = Direct Connect game port (container side; HA Network remaps host).

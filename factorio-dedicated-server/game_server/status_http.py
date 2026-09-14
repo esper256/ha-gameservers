@@ -2638,7 +2638,7 @@ def _format_promote_prompt(
         [
             f"Write Python regexes for the {game_name} dedicated-server add-on.",
             "",
-            "Repo: https://github.com/esper256/hassio-addons",
+            "Repo: https://github.com/esper256/ha-gameservers",
             f"Edit: {yaml_path}  (log_patterns section)",
             "Open a pull request against that repo.",
             "Edit log_patterns in that game.yaml (candidates optional).",
