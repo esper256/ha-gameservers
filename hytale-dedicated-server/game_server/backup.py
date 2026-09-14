@@ -37,6 +37,7 @@ from .world_save import (
     clear_world_artifact,
     effective_world_kind,
     infer_world_kind,
+    install_zip_into_directory,
     write_world_backup,
 )
 
@@ -71,6 +72,23 @@ _LEGACY_TAR_GZ_RE = re.compile(r"\.tar\.gz$", re.IGNORECASE)
 EMPTY_WORLD = "__empty__"
 
 _NAMED_SCOPES = frozenset({SCOPE_NAMED_PATH, SCOPE_MISSING})
+
+BACKUP_SUCCESS = "success"
+BACKUP_SKIPPED = "skipped"
+BACKUP_FAILED = "failed"
+
+
+@dataclass(frozen=True)
+class BackupResult:
+    """Explicit outcome so callers can tell success / nothing-to-do / failed."""
+
+    status: str
+    path: Path | None = None
+    reason: str | None = None
+
+    @property
+    def ok(self) -> bool:
+        return self.status in {BACKUP_SUCCESS, BACKUP_SKIPPED}
 
 
 @dataclass
@@ -431,6 +449,28 @@ class BackupManager:
     ) -> Path | None:
         """Create a by-kind world backup under backup_dir.
 
+        Returns the archive path on success, otherwise ``None``. Prefer
+        ``create_backup_result`` when the caller must distinguish skip vs fail.
+        """
+
+        result = self.create_backup_result(
+            reason,
+            outside_rotation=outside_rotation,
+            allow_tiny=allow_tiny,
+            prune_after=prune_after,
+        )
+        return result.path if result.status == BACKUP_SUCCESS else None
+
+    def create_backup_result(
+        self,
+        reason: str = "manual",
+        *,
+        outside_rotation: bool = False,
+        allow_tiny: bool = False,
+        prune_after: bool = True,
+    ) -> BackupResult:
+        """Create a by-kind world backup; return success / skipped / failed.
+
         ``outside_rotation=True`` writes a ``pre-restore-*`` safety copy
         (age-pruned via the retention profile's ``pre_restore_keep_days``).
 
@@ -445,7 +485,7 @@ class BackupManager:
         """
 
         if not self.enabled and not outside_rotation and reason != "pre-update":
-            return None
+            return BackupResult(BACKUP_SKIPPED, reason="backups disabled")
         self.last_skip_reason = None
         self.backup_dir.mkdir(parents=True, exist_ok=True)
 
@@ -456,27 +496,32 @@ class BackupManager:
                 if available is not None
                 else "insufficient disk space"
             )
-            return None
+            return BackupResult(BACKUP_FAILED, reason=self.last_error)
 
         if allow_tiny:
             if not self.sources_have_any_data():
                 self.last_skip_reason = "no world data to back up"
                 self.last_error = self.last_skip_reason
                 LOG.warning("Skipping backup: %s", self.last_skip_reason)
-                return None
+                return BackupResult(BACKUP_SKIPPED, reason=self.last_skip_reason)
         else:
             valid, reason_text = self.validate_sources()
             if not valid:
                 self.last_skip_reason = reason_text
                 self.last_error = reason_text
                 LOG.warning("Skipping backup: %s", reason_text)
-                return None
+                status = (
+                    BACKUP_FAILED
+                    if self.sources_have_any_data()
+                    else BACKUP_SKIPPED
+                )
+                return BackupResult(status, reason=reason_text)
 
         subject = self._subject()
         if subject is None:
             self.last_skip_reason = "no world data to back up"
             self.last_error = self.last_skip_reason
-            return None
+            return BackupResult(BACKUP_SKIPPED, reason=self.last_skip_reason)
 
         if subject.kind in {KIND_FILE, KIND_DIRECTORY} and subject.path is not None:
             suffix = backup_name_suffix(subject.path, subject.kind)
@@ -512,12 +557,12 @@ class BackupManager:
             archive.unlink(missing_ok=True)
             self.last_skip_reason = "archive was empty after creation"
             self.last_error = self.last_skip_reason
-            return None
+            return BackupResult(BACKUP_FAILED, reason=self.last_error)
         if not allow_tiny and archive.stat().st_size < 64 and subject.kind != KIND_FILE:
             archive.unlink(missing_ok=True)
             self.last_skip_reason = "archive was empty/tiny after creation"
             self.last_error = self.last_skip_reason
-            return None
+            return BackupResult(BACKUP_FAILED, reason=self.last_error)
 
         self.last_backup_at = time.time()
         self.last_backup_path = str(archive)
@@ -526,7 +571,7 @@ class BackupManager:
         self.last_skip_reason = None
         if prune_after:
             self.apply_retention()
-        return archive
+        return BackupResult(BACKUP_SUCCESS, path=archive)
 
     @staticmethod
     def _write_roots_zip(paths: list[Path], dest: Path) -> None:
@@ -874,7 +919,9 @@ class BackupManager:
                 active.path,
                 effective_world_kind(active),
             )
-            result = apply_world_upload(active, path, data_dir=data_dir)
+            result = apply_world_upload(
+                active, path, data_dir=data_dir, strip_wrapper=False
+            )
             result["archive"] = path.name
             result["safety_backup"] = (
                 prior_safety_backup.name if prior_safety_backup is not None else None
@@ -909,10 +956,9 @@ class BackupManager:
             }
         if len(dirs) == 1 and not files:
             target = dirs[0]
-            self._clear_source_contents()
             target.mkdir(parents=True, exist_ok=True)
             LOG.info("Restoring zip backup %s into %s", path.name, target)
-            self._extract_zip_into_directory(path, target)
+            install_zip_into_directory(path, target, strip_wrapper=True)
             return {
                 "ok": True,
                 "mode": "extract_zip_into_directory",
@@ -966,12 +1012,22 @@ class BackupManager:
         }
 
     @staticmethod
-    def _extract_zip_into_directory(archive: Path, target: Path) -> None:
+    def _extract_zip_into_directory(
+        archive: Path,
+        target: Path,
+        *,
+        strip_wrapper: bool = True,
+    ) -> None:
         """Extract zip members under ``target``, rejecting path traversal."""
 
         from .world_save import _extract_zip_into_directory as extract
 
-        extract(archive, target)
+        extract(
+            archive,
+            target,
+            strip_wrapper=strip_wrapper,
+            wrapper_name=target.name,
+        )
 
     @staticmethod
     def _extract_safe(tar: tarfile.TarFile, extract_root: Path) -> None:

@@ -69,14 +69,14 @@ Copy the closest sibling (`necesse-dedicated-server/` for SteamCMD + simple flag
 
    **Version scheme:** `{supervisor_major}.{supervisor_minor}.{game_patch}`.
    The shared supervisor advertises major.minor in `game_server/version.py`
-   (`SUPERVISOR_VERSION`, currently `3.6`). Each game `config.yaml` is that
-   plus a patch (`3.6.0` for the first release on supervisor 3.6).
+   (`SUPERVISOR_VERSION`, currently `3.7`). Each game `config.yaml` is that
+   plus a patch (`3.7.0` for the first release on supervisor 3.7).
 
-   - Supervisor change → bump `SUPERVISOR_VERSION` (e.g. `3.5` → `3.6`) **and**
-     set **every** game add-on to `{new}.0` (`3.6.0`) so users see them all
+   - Supervisor change → bump `SUPERVISOR_VERSION` (e.g. `3.6` → `3.7`) **and**
+     set **every** game add-on to `{new}.0` (`3.7.0`) so users see them all
      update together.
    - Game-only fix (no supervisor change) → bump that game’s patch only
-     (`3.6.0` → `3.6.1`). Leave other games and `SUPERVISOR_VERSION` alone.
+     (`3.7.0` → `3.7.1`). Leave other games and `SUPERVISOR_VERSION` alone.
 
 **Copy `run.sh`’s `export SERVER_PORT=…` when HA publishes a container port the game must bind** (Necesse, Factorio, Stationeers, Core Keeper Direct Connect). The Network UI remaps the *host* port; the process still has to listen on the container port in `config.yaml`. Do **not** set `host_network: true`. Titles that join only through a relay with no listen port can omit it — Core Keeper is not that case: Direct Connect (`-port`) is the default, and Steam Game ID join still works alongside it.
 
