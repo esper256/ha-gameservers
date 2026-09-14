@@ -322,14 +322,17 @@ class ProcessManager:
     def wait(self, timeout: float | None = None) -> int | None:
         proc = self.proc
         if proc is None:
-            return self.last_exit_code
+            # Do not re-report last_exit_code (that busy-loops the supervisor).
+            if timeout and timeout > 0:
+                time.sleep(timeout)
+            return None
         try:
             code = proc.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
             return None
         self.last_exit_code = code
         self.last_stopped_at = time.time()
-        if not self.intentional_stop and code not in (0, None):
+        if not self.intentional_stop and code is not None:
             self.crash_count += 1
             self._crash_times.append(time.time())
             LOG.error("Server exited unexpectedly with code %s", code)

@@ -12,6 +12,7 @@ Games must declare paths — there is no cross-game path guessing.
 from __future__ import annotations
 
 import logging
+import os
 import re
 import shutil
 import tempfile
@@ -598,6 +599,7 @@ def apply_world_upload(
     upload_path: str | Path,
     *,
     data_dir: str | Path,
+    strip_wrapper: bool = True,
 ) -> dict[str, Any]:
     """Replace the active world artifact from an uploaded file or backup.
 
@@ -606,8 +608,13 @@ def apply_world_upload(
 
     - ``file`` — write upload bytes to the target path (game's single-file save,
       which may itself be a ``.zip``)
-    - ``directory`` — clear the target directory in place, then extract a zip
-      into it (game's folder save)
+    - ``directory`` — extract a zip into a staging folder, then swap into the
+      live directory (preserves that directory's inode / ownership)
+
+    ``strip_wrapper`` (default True) unwraps a sole top-level folder, which is
+    what user uploads of ``WorldFolder.zip`` look like. Internal by-kind
+    backups already store paths relative to the live folder; pass False so a
+    real child directory such as ``worlds/save.dat`` round-trips.
 
     Caller owns process stop/start and the pre-restore safety backup. This only
     mutates the active world artifact (+ sibling expected paths that would
@@ -652,14 +659,7 @@ def apply_world_upload(
                 "this game uses a folder world save; upload a .zip of that folder"
             )
         _remove_sibling_expected_paths(active, keep=target, data_dir=data_dir)
-        target.mkdir(parents=True, exist_ok=True)
-        # Clear contents in place (preserve directory ownership/mode).
-        for child in list(target.iterdir()):
-            if child.is_dir() and not child.is_symlink():
-                shutil.rmtree(child)
-            else:
-                child.unlink()
-        _extract_zip_into_directory(upload, target)
+        install_zip_into_directory(upload, target, strip_wrapper=strip_wrapper)
         return {
             "ok": True,
             "mode": "extract_zip_into_directory",
@@ -698,15 +698,123 @@ def _remove_sibling_expected_paths(
             other.unlink()
 
 
-def _extract_zip_into_directory(archive: Path, target: Path) -> None:
-    """Extract zip members under ``target``, rejecting path traversal."""
+def install_zip_into_directory(
+    archive: Path,
+    target: Path,
+    *,
+    strip_wrapper: bool = True,
+) -> None:
+    """Extract ``archive`` into a staging dir, then swap into ``target``.
+
+    ``target``'s directory inode (owner/mode) is kept. Live contents are not
+    removed until staging extract succeeds. A failed extract leaves the live
+    world untouched; a failed swap restores the aside copy.
+    """
+
+    with zipfile.ZipFile(archive, "r") as zf:
+        names = [n for n in zf.namelist() if n and not n.endswith("/")]
+        if not names:
+            raise RuntimeError("uploaded zip has no files")
+
+    target.mkdir(parents=True, exist_ok=True)
+    staging = target.with_name(f".{target.name}.extract-staging")
+    if staging.exists():
+        shutil.rmtree(staging)
+    staging.mkdir()
+    try:
+        _extract_zip_into_directory(
+            archive,
+            staging,
+            strip_wrapper=strip_wrapper,
+            wrapper_name=target.name,
+        )
+        _chown_tree_like(staging, target)
+        _swap_directory_contents(target, staging)
+    finally:
+        if staging.exists():
+            shutil.rmtree(staging, ignore_errors=True)
+
+
+def _chown_tree_like(path: Path, owner_src: Path) -> None:
+    """Best-effort: copied files take the live world's uid/gid (root→gameserver)."""
+
+    try:
+        st = owner_src.stat()
+    except OSError:
+        return
+    uid, gid = st.st_uid, st.st_gid
+    for current in [path, *path.rglob("*")]:
+        try:
+            os.chown(current, uid, gid, follow_symlinks=False)
+        except OSError:
+            continue
+
+
+def _swap_directory_contents(target: Path, staging: Path) -> None:
+    """Replace ``target`` children with ``staging`` children; roll back on error."""
+
+    aside = target.with_name(f".{target.name}.replace-old")
+    if aside.exists():
+        shutil.rmtree(aside)
+    aside.mkdir()
+    moved_old: list[str] = []
+    moved_new: list[str] = []
+    try:
+        for child in list(target.iterdir()):
+            child.rename(aside / child.name)
+            moved_old.append(child.name)
+        for child in list(staging.iterdir()):
+            child.rename(target / child.name)
+            moved_new.append(child.name)
+    except Exception:
+        for name in moved_new:
+            new_path = target / name
+            if new_path.exists():
+                dest = staging / name
+                if dest.exists():
+                    if dest.is_dir():
+                        shutil.rmtree(dest)
+                    else:
+                        dest.unlink()
+                new_path.rename(dest)
+        for name in moved_old:
+            old_path = aside / name
+            if old_path.exists():
+                old_path.rename(target / name)
+        raise
+    finally:
+        if aside.exists():
+            shutil.rmtree(aside, ignore_errors=True)
+
+
+def _extract_zip_into_directory(
+    archive: Path,
+    target: Path,
+    *,
+    strip_wrapper: bool = True,
+    wrapper_name: str | None = None,
+) -> None:
+    """Extract zip members under ``target``, rejecting path traversal.
+
+    When ``strip_wrapper`` is True, a sole top-level directory is removed only
+    if it matches ``wrapper_name`` (the live world folder). That unwraps a user
+    zip of the folder itself without flattening a real child such as ``worlds/``.
+    """
 
     root = target.resolve()
     with zipfile.ZipFile(archive, "r") as zf:
         names = [n for n in zf.namelist() if n and not n.endswith("/")]
         if not names:
             raise RuntimeError("uploaded zip has no files")
-        strip_prefix = _single_top_level_dir_prefix(zf.namelist())
+        strip_prefix = None
+        if strip_wrapper:
+            strip_prefix = _single_top_level_dir_prefix(zf.namelist())
+            if (
+                strip_prefix
+                and wrapper_name
+                and strip_prefix.rstrip("/") != wrapper_name
+            ):
+                strip_prefix = None
         for info in zf.infolist():
             name = info.filename
             if not name or name.endswith("/"):

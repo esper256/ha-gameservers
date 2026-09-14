@@ -951,7 +951,9 @@ class GameServerSupervisor:
                 if self.process.running:
                     self.process.stop()
                 try:
-                    self.backups.create_backup(reason="pre-update")
+                    outcome = self.backups.create_backup_result(
+                        reason="pre-update", allow_tiny=True
+                    )
                 except (OSError, tarfile.TarError) as exc:
                     # Do not mutate the install when we could not snapshot the world.
                     LOG.exception("Pre-update backup failed; aborting update")
@@ -964,6 +966,19 @@ class GameServerSupervisor:
                     self._schedule_update_retry(exc)
                     self._restart_existing_after_update_failure()
                     raise
+                if outcome.status == "failed":
+                    reason_text = outcome.reason or "pre-update backup failed"
+                    LOG.error("Pre-update backup failed; aborting update: %s", reason_text)
+                    self.notifier.notify(
+                        "backup_failed",
+                        f"{self.plugin.name}: pre-update backup failed",
+                        f"Update aborted until a world backup succeeds.\n{reason_text}",
+                        force=True,
+                    )
+                    exc = RuntimeError(reason_text)
+                    self._schedule_update_retry(exc)
+                    self._restart_existing_after_update_failure()
+                    raise exc
 
             if self.process.running:
                 self.process.stop()
@@ -1336,12 +1351,6 @@ class GameServerSupervisor:
                 continue
             if self._stop.is_set():
                 break
-            if (
-                self._update_pending
-                or self._restore_pending
-                or self._upload_pending is not None
-            ):
-                continue
             if self.process.intentional_stop:
                 break
             try:
