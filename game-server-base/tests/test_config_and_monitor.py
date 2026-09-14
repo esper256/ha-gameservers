@@ -2149,7 +2149,7 @@ class StatusFormatTests(unittest.TestCase):
         self.assertNotIn("Unused pattern guesses", html)
         self.assertNotIn(">unused<", html)
         self.assertIn("Copy prompt", html)
-        self.assertIn("https://github.com/esper256/hassio-addons", html)
+        self.assertIn("https://github.com/esper256/ha-gameservers", html)
         self.assertIn("necesse-dedicated-server/games/game.yaml", view["promote_prompt"])
         self.assertNotIn("Highlighted lines", html)
         self.assertNotIn("View recent game output", html)
@@ -3318,7 +3318,7 @@ class StatusFormatTests(unittest.TestCase):
         )["promote_prompt"]
         self.assertIn("aaa_stale", prompt)
         self.assertIn("maybe new format", prompt)
-        self.assertIn("https://github.com/esper256/hassio-addons", prompt)
+        self.assertIn("https://github.com/esper256/ha-gameservers", prompt)
         self.assertIn("necesse-dedicated-server/games/game.yaml", prompt)
         self.assertIn("re.IGNORECASE", prompt)
         self.assertIn("named group player", prompt)

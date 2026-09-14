@@ -2,7 +2,7 @@ name: "Hytale Dedicated Server"
 description: "Hytale dedicated multiplayer server (official Linux downloader, Java 25) with auto-updates, world backups, and an Ingress status UI. First start needs two Hytale account sign-ins (download, then server)."
 version: "3.6.0"
 slug: "hytale_dedicated_server"
-url: "https://github.com/esper256/hassio-addons/tree/main/hytale-dedicated-server"
+url: "https://github.com/esper256/ha-gameservers/tree/main/hytale-dedicated-server"
 arch:
   - amd64
 startup: application

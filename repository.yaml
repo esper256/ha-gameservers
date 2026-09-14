@@ -1,5 +1,5 @@
 # https://developers.home-assistant.io/docs/apps/publishing
 # Shown in Settings → Apps → App store → Repositories
 name: esper256 Home Assistant apps
-url: "https://github.com/esper256/hassio-addons"
+url: "https://github.com/esper256/ha-gameservers"
 maintainer: Eric Friesen <eric@friesen.org>
