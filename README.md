@@ -13,6 +13,7 @@ A small ecosystem of **dedicated game server** apps for Home Assistant OS, built
 | **[Factorio](https://factorio.com/)** | [factorio-dedicated-server/GUIDE.md](factorio-dedicated-server/GUIDE.md) |
 | **[Core Keeper](https://store.steampowered.com/app/1621690/Core_Keeper/)** | [core-keeper-dedicated-server/GUIDE.md](core-keeper-dedicated-server/GUIDE.md) |
 | **[Hytale](https://hytale.com/)** | [hytale-dedicated-server/GUIDE.md](hytale-dedicated-server/GUIDE.md) |
+| **[Minecraft](https://www.minecraft.net/)** | [minecraft-dedicated-server/GUIDE.md](minecraft-dedicated-server/GUIDE.md) |
 
 Want a game that is not listed? [Skip to the bottom](#using-agentic-coding-to-add-support-for-another-game) to learn how to add support for a new game.
 
@@ -42,7 +43,7 @@ Each Home Assistant app gives you automatic updates, world backups, Home Assista
 
 `game-server-base` is not an installable app. It is the reusable engine every game folder vendors. The base supervisor handles SteamCMD, HTTP archive, or command-based package install and auto-update, process supervision, crash restarts, scheduled world save backups, and a log-pattern scraping toolkit to enable the supervisor to have some vision into the game server state.
 
-Each game add-on is a thin layer on top (Steam/package identity, ports, world paths, log patterns, theme). Packaging another dedicated server is mostly: copy a game folder, fill in `games/game.yaml`, keep game identity out of the base package, sync, bump `{supervisor}.{minor}.{game patch}` (supervisor **3.7** → apps **3.7.0**).
+Each game add-on is a thin layer on top (Steam/package identity, ports, world paths, log patterns, theme). Packaging another dedicated server is mostly: copy a game folder, fill in `games/game.yaml`, keep game identity out of the base package, sync, bump `{supervisor}.{minor}.{game patch}` (supervisor **3.8** → apps **3.8.0**).
 
 → [How to package a game](game-server-base/README.md)
 

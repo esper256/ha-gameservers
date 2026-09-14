@@ -69,14 +69,14 @@ Copy the closest sibling (`necesse-dedicated-server/` for SteamCMD + simple flag
 
    **Version scheme:** `{supervisor_major}.{supervisor_minor}.{game_patch}`.
    The shared supervisor advertises major.minor in `game_server/version.py`
-   (`SUPERVISOR_VERSION`, currently `3.7`). Each game `config.yaml` is that
-   plus a patch (`3.7.0` for the first release on supervisor 3.7).
+   (`SUPERVISOR_VERSION`, currently `3.8`). Each game `config.yaml` is that
+   plus a patch (`3.8.0` for the first release on supervisor 3.8).
 
-   - Supervisor change → bump `SUPERVISOR_VERSION` (e.g. `3.6` → `3.7`) **and**
-     set **every** game add-on to `{new}.0` (`3.7.0`) so users see them all
+   - Supervisor change → bump `SUPERVISOR_VERSION` (e.g. `3.7` → `3.8`) **and**
+     set **every** game add-on to `{new}.0` (`3.8.0`) so users see them all
      update together.
    - Game-only fix (no supervisor change) → bump that game’s patch only
-     (`3.7.0` → `3.7.1`). Leave other games and `SUPERVISOR_VERSION` alone.
+     (`3.8.0` → `3.8.1`). Leave other games and `SUPERVISOR_VERSION` alone.
 
 **Copy `run.sh`’s `export SERVER_PORT=…` when HA publishes a container port the game must bind** (Necesse, Factorio, Stationeers, Core Keeper Direct Connect). The Network UI remaps the *host* port; the process still has to listen on the container port in `config.yaml`. Do **not** set `host_network: true`. Titles that join only through a relay with no listen port can omit it — Core Keeper is not that case: Direct Connect (`-port`) is the default, and Steam Game ID join still works alongside it.
 
@@ -183,7 +183,10 @@ Point the container at your plugin with `GAME_PLUGIN` (Necesse’s `run.sh` does
 | `env_options` | Extra UPPER_SNAKE Docker/compose env vars (optional). Keys from `arg_map` / `settings_map` / `{option}` templates are accepted automatically |
 | `data_dir` / `logs_dir` / `working_dir` | Usually under `/data/...` |
 | `stop_stdin_commands` | Optional graceful stop |
+| `pre_backup_stdin_commands` | Optional stdin lines sent before a scheduled live backup (save flush). Does not stop the process. |
 | `world_save` | Active world artifact: `strategy: named_path` + `paths` templates. Drives status UI, upload restore, and **by-kind backups** (file = copy as-is; folder = zip). Backup archives are named with that file/folder, retention is grouped per name, and restore refuses a snapshot from a different world until the active name/slot matches. |
+| `world_catalog` | Optional Ingress world list (`glob` / `globs`, `name_from`, optional `caption_file` + `caption_json_path`). |
+| `world_create` | Optional extra Ingress create-world fields (`text` or `select`). Labels and values come from the plugin YAML. |
 | `backup_paths` | Fallback roots when no named world exists yet; also used to restore legacy `*.tar.gz` snapshots |
 | `log_patterns` | Active regexes (ready, players, version, `players_empty`, …). Prefer empty until proven. |
 | `log_pattern_candidates` | Extra dry-run regexes for Ingress highlighting |
@@ -230,8 +233,9 @@ A game-layer install or launch script may write `/data/supervisor/operator_actio
 - SteamCMD install/update with a rate gate (serialize, spacing, backoff)
 - Non-Steam `package_install` (`http_archive` or plugin `command` argv)
 - Optional Ingress operator-action card (`operator_action.json`: open URL, copy code)
-- Process supervision, crash restarts, privilege drop to `gameserver`
-- By-kind world backups + retention profiles (per world name/slot); Ingress restore / NEW WORLD / upload
+- Process supervision, crash restarts, in-process game restart (`POST /api/restart` or `restart.request`), privilege drop to `gameserver`
+- By-kind world backups + retention profiles (per world name/slot); Ingress restore / NEW WORLD / upload; optional live save-flush via `pre_backup_stdin_commands`
+- Ingress world picker (catalog glob + create-world extra fields from the plugin)
 - HA Core notifications + `/data/supervisor/status.json`
 - Ingress status HTTP and log capture toolkit
 - Mirrored streams on the HA Logs tab (`[game]`, `[game-log]`, `[steamcmd]`)

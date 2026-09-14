@@ -11,6 +11,7 @@ from typing import Any, Mapping
 
 from .launch_prepare import ConfigFileSpec, WorldPrepareSpec
 from .package_install import PackageInstallSpec
+from .world_catalog import WorldCatalogSpec, WorldCreateSpec
 from .world_save import WorldSaveSpec
 
 _OPTION_TEMPLATE_RE = re.compile(r"\{([a-zA-Z_][a-zA-Z0-9_]*)\}")
@@ -88,6 +89,8 @@ class GamePlugin:
     java_opts_env: str = "JAVA_OPTS"
     stop_timeout_seconds: int = 60
     stop_stdin_commands: list[str] = field(default_factory=list)
+    # Optional live-backup flush via game stdin (does not stop the process).
+    pre_backup_stdin_commands: list[str] = field(default_factory=list)
     min_backup_bytes: int = 1024
     # Optional runtime packages hint for image authors (documentation only).
     runtime_notes: str = ""
@@ -97,6 +100,10 @@ class GamePlugin:
     config_files: list[ConfigFileSpec] = field(default_factory=list)
     # Optional one-shot argv when the active world is missing (create-save, etc.).
     world_prepare: WorldPrepareSpec | None = None
+    # Optional Ingress world list (globs). Games without this keep a single name.
+    world_catalog: WorldCatalogSpec | None = None
+    # Optional extra fields on Ingress "create world" (text/select; plugin labels).
+    world_create: WorldCreateSpec | None = None
     # Optional Ingress status page CSS color overrides (see status_http.DEFAULT_UI_THEME).
     ui_theme: dict[str, str] = field(default_factory=dict)
     # count (default) or presence — see PLAYER_TRACKING_* constants.
@@ -175,11 +182,16 @@ class GamePlugin:
             stop_stdin_commands=[
                 str(x) for x in (data.get("stop_stdin_commands") or [])
             ],
+            pre_backup_stdin_commands=[
+                str(x) for x in (data.get("pre_backup_stdin_commands") or [])
+            ],
             min_backup_bytes=int(data.get("min_backup_bytes", 1024)),
             runtime_notes=str(data.get("runtime_notes") or ""),
             world_save=WorldSaveSpec.from_dict(data.get("world_save")),
             config_files=_coerce_config_files(data.get("config_files")),
             world_prepare=WorldPrepareSpec.from_dict(data.get("world_prepare")),
+            world_catalog=WorldCatalogSpec.from_dict(data.get("world_catalog")),
+            world_create=WorldCreateSpec.from_dict(data.get("world_create")),
             ui_theme=_coerce_ui_theme(data.get("ui_theme")),
             player_tracking_mode=tracking_mode,
         )

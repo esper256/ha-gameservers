@@ -1,0 +1,76 @@
+configuration:
+  world_name:
+    name: World name
+    description: Default world profile folder (Open Web UI can switch/create more).
+  minecraft_version:
+    name: Minecraft version
+    description: Pinned Java edition version (example 1.21.1). Changing this reinstalls loaders.
+  server_motd:
+    name: MOTD
+    description: Message of the day in server.properties.
+  server_slots:
+    name: Max players
+    description: server.properties max-players.
+  online_mode:
+    name: Online mode
+    description: Require Microsoft accounts (recommended).
+  white_list:
+    name: Whitelist
+    description: Only allow listed players (recommended).
+  eula:
+    name: Accept Minecraft EULA
+    description: Required to run the official dedicated server.
+  publisher_password:
+    name: Upload page password
+    description: Copyparty login for the kid JAR drop page on TCP 8765.
+  java_opts:
+    name: Java options
+    description: JVM flags (default -Xms2G -Xmx4G).
+  update_on_start:
+    name: Install loaders on start
+    description: Run the Fabric/NeoForge installer when the pin is missing or changed.
+  auto_update_interval_minutes:
+    name: Auto-update interval (minutes)
+    description: Keep 0 so Minecraft stays pinned. The pin only changes when you edit Minecraft version.
+  auto_update_check_hour:
+    name: Daily update check hour
+    description: Unused while the interval is 0.
+  update_when_empty_only:
+    name: Update only when empty
+    description: If a loader reinstall is needed, wait until nobody is online.
+  update_on_version_mismatch:
+    name: Update on version mismatch
+    description: Leave off; Minecraft is pinned.
+  debug_mode:
+    name: Debug mode
+    description: Show Ingress log-watch pattern tooling.
+  update_window_start_hour:
+    name: Update window start hour
+    description: Optional local hour when loader reinstalls may begin.
+  update_window_end_hour:
+    name: Update window end hour
+    description: Optional local hour when loader reinstalls must stop.
+  restart_on_crash:
+    name: Restart on crash
+    description: Relaunch Minecraft after an unexpected exit.
+  status_http_enabled:
+    name: Status page
+    description: Ingress Open Web UI on port 8099.
+  ha_notifications:
+    name: Home Assistant notifications
+    description: Persistent notifications on crash and backup failure.
+  backup_enabled:
+    name: Enable backups
+    description: Daily zip of the active world profile (save + mods).
+  backup_on_update:
+    name: Backup before update
+    description: Snapshot the profile before a loader reinstall.
+  backup_retention:
+    name: Backup retention
+    description: minimal / standard / extended thinning.
+  min_free_disk_mb:
+    name: Minimum free disk (MiB)
+    description: Skip backups when free space is below this.
+network:
+  25565/tcp: Minecraft Java (TCP). Players join host:25565.
+  8765/tcp: Kid JAR upload page. Keep on the LAN.

@@ -30,6 +30,20 @@ from .status_http import StatusServer
 from .steam_gate import configure_gate
 from .steamcmd import SteamCMDError
 from .version import app_version, supervisor_version
+from .active_world import (
+    apply_active_world_to_options,
+    consume_restart_request,
+    load_active_world,
+    save_active_world,
+    try_sync_ha_addon_option,
+)
+from .world_catalog import (
+    expected_world_path,
+    list_catalog_worlds,
+    validate_create_fields,
+    validate_world_name,
+    write_world_create_payload,
+)
 from .world_save import (
     apply_world_upload,
     backup_sources_for,
@@ -104,6 +118,8 @@ class GameServerSupervisor:
         )
         # HA/Docker: steam_branch and/or package release_channel (stable/experimental).
         self.plugin.apply_install_channel_options(config.game_options)
+        stored_world = load_active_world(config.state_dir)
+        apply_active_world_to_options(config.game_options, stored_world)
 
         Path(config.state_dir).mkdir(parents=True, exist_ok=True)
         Path(data_dir).mkdir(parents=True, exist_ok=True)
@@ -175,9 +191,14 @@ class GameServerSupervisor:
             max_backoff_minutes=config.backup_max_backoff_minutes,
         )
         self.backups.set_failure_callback(self._on_backup_failure)
+        self.backups.set_pre_backup_callback(self._flush_before_backup)
         self.status_server: StatusServer | None = None
         self._update_thread: threading.Thread | None = None
         self._status_thread: threading.Thread | None = None
+        self._restart_pending = False
+        self._restart_reason: str | None = None
+        self._restart_not_before = 0.0
+        self._restart_lock = threading.Lock()
 
     def _package_extra_env(self) -> dict[str, str]:
         """Env for plugin command installers (dirs + optional release channel)."""
@@ -204,6 +225,22 @@ class GameServerSupervisor:
                 "The next attempt backs off automatically."
             ),
         )
+
+    def _flush_before_backup(self) -> None:
+        commands = list(self.plugin.pre_backup_stdin_commands)
+        if not commands or not self.process.running:
+            return
+        if self.process.send_stdin_commands(commands):
+            time.sleep(2)
+
+    def _world_option_key(self) -> str:
+        spec = self.plugin.world_save
+        if spec is not None and spec.world_name_option:
+            return spec.world_name_option
+        return "world_name"
+
+    def _active_world_name(self) -> str:
+        return str(self.config.game_options.get(self._world_option_key()) or "").strip()
 
     def world_save_download(self) -> dict[str, Any] | None:
         """Prepare the active world save for Ingress download (file or zip)."""
@@ -473,10 +510,12 @@ class GameServerSupervisor:
             return "stopping" if self.process.running else "stopped"
         if read_operator_action(self.config.state_dir):
             return "waiting"
-        if self._activity in ("installing", "updating", "restoring"):
+        if self._activity in ("installing", "updating", "restoring", "restarting"):
             return self._activity
         if self._restore_pending or self._upload_pending is not None:
             return "restoring"
+        if self._restart_pending:
+            return "waiting"
         if self.process.running:
             return "running"
         if self._update_pending:
@@ -571,6 +610,24 @@ class GameServerSupervisor:
             "remote_build_id": self.remote_build_id,
             "install_last_updated_at": install_meta.get("last_updated"),
             "world_save": world_size,
+            "worlds": {
+                "active": self._active_world_name(),
+                "option_key": self._world_option_key(),
+                "catalog": [
+                    item.to_dict()
+                    for item in list_catalog_worlds(
+                        self.plugin.world_catalog,
+                        data_dir=self.plugin.data_dir,
+                        options=self.config.game_options,
+                        active_name=self._active_world_name(),
+                    )
+                ],
+                "create_fields": (
+                    self.plugin.world_create.to_list()
+                    if self.plugin.world_create is not None
+                    else []
+                ),
+            },
             "update_pending": self._update_pending,
             "update_reason": self._update_reason,
             "update_pending_since": self._update_pending_since,
@@ -587,6 +644,8 @@ class GameServerSupervisor:
             "auto_update_check_hour": self.config.auto_update_check_hour,
             "install_dir": self.config.install_dir,
             "restore_pending": self._restore_pending,
+            "restart_pending": self._restart_pending,
+            "restart_reason": self._restart_reason,
             "last_restore_at": self.last_restore_at,
             "last_restore_error": self.last_restore_error,
             # Plain-language status for the UI (avoid "gating" jargon).
@@ -707,6 +766,132 @@ class GameServerSupervisor:
             "update_pending": True,
             "players_online": online,
         }
+
+    def request_restart(
+        self,
+        reason: str = "manual",
+        *,
+        debounce_seconds: float = 0,
+        ignore_players: bool = True,
+    ) -> dict[str, Any]:
+        """Schedule a game-process restart without exiting the supervisor."""
+
+        if self._update_pending:
+            return {
+                "ok": False,
+                "error": "An update is already pending; wait for it to finish",
+            }
+        with self._restore_lock:
+            if self._restore_pending or self._upload_pending is not None:
+                return {
+                    "ok": False,
+                    "error": "A restore is already pending; wait for it to finish",
+                }
+        delay = max(0.0, float(debounce_seconds or 0))
+        with self._restart_lock:
+            self._restart_pending = True
+            self._restart_reason = reason
+            not_before = time.time() + delay
+            if delay > 0:
+                self._restart_not_before = max(self._restart_not_before, not_before)
+            else:
+                self._restart_not_before = 0.0
+        LOG.info(
+            "Game restart requested (%s)%s",
+            reason,
+            f" in {delay:.0f}s" if delay else "",
+        )
+        online = self._players_online()
+        return {
+            "ok": True,
+            "message": (
+                "Restart scheduled. The game server will stop and start again. "
+                "Anyone playing will be disconnected."
+                if ignore_players
+                else "Restart scheduled."
+            ),
+            "restart_pending": True,
+            "players_online": online,
+        }
+
+    def _apply_restart(self) -> None:
+        reason = self._restart_reason or "manual"
+        LOG.info("Restarting game process (%s)", reason)
+        self._activity = "restarting"
+        try:
+            if self.process.running:
+                self.process.stop()
+            if self._stop.is_set():
+                return
+            self.monitor.reset_session()
+            self.process.start(reason=f"restart:{reason}")
+        finally:
+            self._activity = None
+            with self._restart_lock:
+                self._restart_pending = False
+                self._restart_reason = None
+                self._restart_not_before = 0.0
+
+    def _select_world(self, name: str) -> None:
+        key = self._world_option_key()
+        self.config.game_options[key] = name
+        save_active_world(
+            self.config.state_dir, option_key=key, value=name
+        )
+        try_sync_ha_addon_option(key, name)
+
+    def request_world_switch(self, name: str) -> dict[str, Any]:
+        try:
+            world_name = validate_world_name(name)
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+        current = self._active_world_name()
+        if world_name == current:
+            return {
+                "ok": True,
+                "message": f"{world_name} is already the active world",
+                "world": world_name,
+            }
+        self._select_world(world_name)
+        result = self.request_restart(reason="world-switch", debounce_seconds=0)
+        if not result.get("ok"):
+            return result
+        result["world"] = world_name
+        result["message"] = (
+            f"Switching to {world_name}. The game server will restart."
+        )
+        return result
+
+    def request_world_create(
+        self, name: str, fields: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        try:
+            world_name = validate_world_name(name)
+            extra = validate_create_fields(self.plugin.world_create, fields)
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+        paths = list(self.plugin.world_save.paths) if self.plugin.world_save else []
+        options = dict(self.config.game_options)
+        options[self._world_option_key()] = world_name
+        expected = expected_world_path(
+            paths,
+            data_dir=self.plugin.data_dir,
+            world_name=world_name,
+            options=options,
+        )
+        write_world_create_payload(expected_path=expected, fields=extra)
+        if expected:
+            Path(expected).parent.mkdir(parents=True, exist_ok=True)
+        self._select_world(world_name)
+        result = self.request_restart(reason="world-create", debounce_seconds=0)
+        if not result.get("ok"):
+            return result
+        result["world"] = world_name
+        result["created"] = True
+        result["message"] = (
+            f"Creating world {world_name}. The game server will restart."
+        )
+        return result
 
     def _within_update_window(self) -> bool:
         start = self.config.update_window_start_hour
@@ -1281,6 +1466,9 @@ class GameServerSupervisor:
                 upload_callback=self.request_world_upload,
                 upload_staging_dir=self.config.backup_dir,
                 world_download_callback=self.world_save_download,
+                restart_callback=self.request_restart,
+                world_switch_callback=self.request_world_switch,
+                world_create_callback=self.request_world_create,
             )
             self.status_server.start()
 
@@ -1327,6 +1515,18 @@ class GameServerSupervisor:
                             self._upload_pending = None
                     staged.unlink(missing_ok=True)
 
+            file_restart = consume_restart_request(self.config.state_dir)
+            if file_restart is not None:
+                debounce = file_restart.get("debounce_seconds") or 0
+                reason = str(file_restart.get("reason") or "script")
+                self.request_restart(reason=reason, debounce_seconds=float(debounce))
+
+            if self._restart_pending and time.time() >= self._restart_not_before:
+                try:
+                    self._apply_restart()
+                except Exception:
+                    LOG.exception("Game process restart failed")
+
             if self._urgent_update_check:
                 try:
                     self._run_urgent_update_check()
@@ -1351,6 +1551,12 @@ class GameServerSupervisor:
                 continue
             if self._stop.is_set():
                 break
+            if (
+                self._restore_pending
+                or self._upload_pending is not None
+                or self._restart_pending
+            ):
+                continue
             if self.process.intentional_stop:
                 break
             try:

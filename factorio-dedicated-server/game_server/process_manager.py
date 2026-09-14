@@ -319,6 +319,30 @@ class ProcessManager:
         with self._lock:
             self.proc = None
 
+    def send_stdin_commands(self, commands: list[str]) -> bool:
+        """Write plugin commands to the running process stdin without stopping.
+
+        Used for live save-flush before a scheduled backup. Returns False when
+        the process is not running or stdin is unavailable.
+        """
+
+        lines = [str(item) for item in commands if str(item).strip()]
+        if not lines:
+            return False
+        with self._lock:
+            proc = self.proc
+        if proc is None or proc.poll() is not None or proc.stdin is None:
+            return False
+        try:
+            for command in lines:
+                LOG.info("Sending stdin command: %s", command)
+                proc.stdin.write(command + "\n")
+                proc.stdin.flush()
+        except OSError:
+            LOG.exception("Failed writing stdin commands")
+            return False
+        return True
+
     def wait(self, timeout: float | None = None) -> int | None:
         proc = self.proc
         if proc is None:

@@ -1,0 +1,83 @@
+name: Minecraft
+package_install:
+  kind: command
+  version_argv:
+    - python3
+    - /opt/haos_defaults.py
+    - print-version
+  install_argv:
+    - python3
+    - /opt/haos_defaults.py
+    - install
+working_dir: /data/worlds
+data_dir: /data/worlds
+logs_dir: /data/logs
+install_marker: .loaders_ready
+min_backup_bytes: 1024
+stop_timeout_seconds: 120
+stop_stdin_commands:
+  - stop
+pre_backup_stdin_commands:
+  - save-all flush
+backup_paths:
+  - /data/worlds
+world_save:
+  strategy: named_path
+  paths:
+    - "{data_dir}/{world_name}"
+world_catalog:
+  glob: "{data_dir}/*"
+  name_from: directory
+  caption_file: profile.json
+  caption_json_path: loader
+world_create:
+  fields:
+    - id: mod_loader
+      kind: select
+      label: Mod loader
+      default: neoforge
+      options:
+        - value: neoforge
+          label: NeoForge
+        - value: fabric
+          label: Fabric
+world_prepare:
+  when: missing
+  timeout_seconds: 180
+  argv:
+    - prepare
+executable:
+  - /opt/launch_wrapper.sh
+bool_style: true_false
+ready_timeout_seconds: 300
+env_options:
+  - JAVA_OPTS
+  - MINECRAFT_VERSION
+  - PUBLISHER_PASSWORD
+  - SERVER_MOTD
+  - EULA
+  - ONLINE_MODE
+  - WHITE_LIST
+ui_theme:
+  bg: "#1a140c"
+  panel: "#2a2116"
+  ink: "#f2e6c9"
+  muted: "#a89068"
+  accent: "#5aad32"
+  good: "#7cbf4a"
+  bad: "#d45c48"
+  glow: "#3a2a14"
+  wash: "#120e08"
+  depth: "#0e0b07"
+player_tracking_mode: count
+log_patterns: {}
+log_pattern_candidates:
+  ready:
+    - '(?i)done \(.*\)! for help'
+    - '(?i)starting minecraft server on'
+  player_join:
+    - '(?i)(?P<player>\S+) joined the game'
+  player_leave:
+    - '(?i)(?P<player>\S+) left the game'
+  game_version:
+    - '(?i)starting minecraft server version (?P<version>[\w.\-]+)'

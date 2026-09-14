@@ -19,8 +19,13 @@ for dest in "$ROOT"/*/; do
   if [[ "$(cd "$dest" && pwd)" == "$BASE" ]]; then
     continue
   fi
-  if [[ -f "${dest}config.yaml" && -d "${dest}games" && -d "${dest}game_server" ]]; then
+  if [[ -f "${dest}config.yaml" && -d "${dest}games" ]]; then
     found=$((found + 1))
+    if [[ ! -d "${dest}game_server" ]]; then
+      echo "MISSING: ${dest}game_server (run ./game-server-base/sync-into-addons.sh)" >&2
+      fail=1
+      continue
+    fi
     if ! diff -qr -x '__pycache__' -x '*.pyc' "$SRC" "${dest}game_server" >/dev/null; then
       echo "OUT OF SYNC: ${dest}game_server" >&2
       diff -qr -x '__pycache__' -x '*.pyc' "$SRC" "${dest}game_server" >&2 || true

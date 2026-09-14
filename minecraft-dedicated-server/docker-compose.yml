@@ -1,0 +1,49 @@
+# Portainer / plain Docker example for Minecraft.
+# Security note: bind 8099 to localhost. 8765 is a passworded upload page — still LAN-only.
+services:
+  minecraft:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: minecraft-dedicated-server:local
+    container_name: minecraft
+    restart: unless-stopped
+    ports:
+      - "25565:25565/tcp"
+      - "8765:8765/tcp"
+      - "127.0.0.1:8099:8099"
+    environment:
+      GAME_PLUGIN: /opt/games/game.yaml
+      INSTALL_DIR: /data/installs
+      DATA_DIR: /data/worlds
+      STATE_DIR: /data/supervisor
+      WORLD_NAME: FamilyWorld
+      MINECRAFT_VERSION: "1.21.1"
+      SERVER_MOTD: Family Minecraft
+      SERVER_SLOTS: "8"
+      ONLINE_MODE: "true"
+      WHITE_LIST: "true"
+      EULA: "true"
+      PUBLISHER_PASSWORD: changeme
+      JAVA_OPTS: "-Xms2G -Xmx4G"
+      UPDATE_ON_START: "true"
+      AUTO_UPDATE_INTERVAL_MINUTES: "0"
+      UPDATE_WHEN_EMPTY_ONLY: "true"
+      STATUS_HTTP_ENABLED: "true"
+      STATUS_HTTP_PORT: "8099"
+      HA_NOTIFICATIONS: "false"
+      SERVER_PORT: "25565"
+      PUBLISHER_PORT: "8765"
+      BACKUP_ENABLED: "true"
+      BACKUP_RETENTION: standard
+      MIN_FREE_DISK_MB: "2048"
+      TZ: America/Los_Angeles
+    volumes:
+      - ./data:/data
+    stop_grace_period: 300s
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8099/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 300s
