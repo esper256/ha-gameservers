@@ -120,6 +120,15 @@ def attempt_needs_player(
     )
 
 
+def _pin_matches(payload: dict[str, Any], *, ha_version: str, loader: str) -> bool:
+    return (
+        str(payload.get("minecraft_version") or payload.get("last_attempt_ha_version") or "").strip()
+        == str(ha_version)
+        and str(payload.get("loader") or payload.get("last_attempt_loader") or "").strip()
+        == str(loader)
+    )
+
+
 def choose_boot_mode(
     directory: Path, *, ha_version: str, loader: str
 ) -> BootMode:
@@ -135,11 +144,23 @@ def choose_boot_mode(
         str(session.get("mode") or "") == "attempt"
         and not bool(session.get("proven"))
     )
-    if requested or pin_changed or not last_ha:
+    meta = load_golden_meta(directory)
+    golden_stale = meta is not None and not _pin_matches(
+        meta, ha_version=ha_version, loader=loader
+    )
+    if requested or not last_ha:
         return "attempt"
-    if unproven_attempt and has_golden(directory):
+    # Crash-loop fallback: the JVM just died on this same HA pin. Do not restage.
+    if unproven_attempt and meta is not None and _pin_matches(
+        session, ha_version=ha_version, loader=loader
+    ):
         return "golden"
-    if has_golden(directory):
+    # A later start (addon restart, operator stop/start) must retry the HA pin
+    # even if last_attempt already recorded it. Otherwise a stopped/unproven
+    # pin change boots the old golden forever.
+    if pin_changed or golden_stale:
+        return "attempt"
+    if meta is not None:
         return "golden"
     return "attempt"
 

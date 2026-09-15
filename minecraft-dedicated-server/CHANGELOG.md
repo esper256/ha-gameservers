@@ -2,6 +2,7 @@
 
 ## 3.14.1
 
+- Changing Minecraft version on Configuration starts a new server+mods snapshot even after the first launch. If that try fails, the last proven snapshot still starts; a later start tries the new pin again.
 - Minecraft version on Configuration is used even if the add-on was not fully restarted. A missing install for that version is downloaded before boot.
 - Player count is read from the Java status ping so the log is not filled with RCON connect/disconnect lines.
 

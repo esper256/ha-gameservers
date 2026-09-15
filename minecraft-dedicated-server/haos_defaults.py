@@ -48,12 +48,19 @@ def options() -> dict[str, Any]:
 
 
 def env_or_option(key: str, default: str = "") -> str:
-    env_key = key.upper()
-    if os.environ.get(env_key):
-        return str(os.environ[env_key]).strip()
+    """HA ``options.json`` wins over a leftover process env value.
+
+    Home Assistant writes the live pin on each start. Docker/compose may still
+    export ``MINECRAFT_VERSION`` from the first launch; that must not freeze
+    the Configuration tab.
+    """
+
     opt = options()
     if key in opt and str(opt.get(key) or "").strip():
         return str(opt[key]).strip()
+    env_key = key.upper()
+    if os.environ.get(env_key):
+        return str(os.environ[env_key]).strip()
     return default
 
 
@@ -398,6 +405,10 @@ def cmd_prepare_world() -> int:
     if loader not in {"neoforge", "fabric"}:
         loader = "neoforge"
     version = minecraft_version()
+    pin_changed = (
+        str(profile.get("minecraft_version") or "").strip() != version
+        or str(profile.get("loader") or "").strip().lower() != loader
+    )
     write_json(
         directory / "profile.json",
         {
@@ -415,6 +426,8 @@ def cmd_prepare_world() -> int:
     )
     _write_server_properties(directory)
     _link_install(directory, loader, version)
+    if pin_changed:
+        _clear_seeded_infrastructure(directory)
     _seed_infrastructure(directory, loader, version)
     cmd_write_copyparty_banner()
     return 0
@@ -508,6 +521,18 @@ def _seed_jar(url: str, dest: Path) -> None:
     _download(url, tmp)
     os.replace(tmp, dest)
     os.chmod(dest, SEALED_MODE)
+
+
+def _clear_seeded_infrastructure(directory: Path) -> None:
+    """Drop baked AutoModpack / Fabric API so a new pin can re-seed."""
+
+    uploaded = uploaded_mods_dir(directory)
+    if not uploaded.is_dir():
+        return
+    for path in uploaded.glob("automodpack*.jar"):
+        path.unlink(missing_ok=True)
+    for path in uploaded.glob("fabric-api*.jar"):
+        path.unlink(missing_ok=True)
 
 
 def _seed_infrastructure(directory: Path, loader: str, version: str) -> None:
