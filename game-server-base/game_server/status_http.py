@@ -2219,15 +2219,18 @@ def _ui_view(
     players_known = bool(monitor.get("players_known"))
     presence_mode = tracking_mode == "presence"
     debug_mode = bool(status.get("debug_mode"))
-    # Without debug mode, hide the players card until an active pattern can
-    # populate it — otherwise the card is a permanent empty state that looks broken.
-    # Count mode needs player_count; join/leave games use the last-joined card.
+    # Without debug mode, hide the players card until an active pattern or
+    # status_probe can populate it — otherwise the card is a permanent empty
+    # state that looks broken. Count mode needs a numeric source (log
+    # player_count or status_probe); join/leave-only games use last-joined.
     has_active_player_count = "player_count" in active_categories
+    has_probe_count = bool(status.get("status_probe")) and not presence_mode
+    has_numeric_count = has_active_player_count or has_probe_count
     has_active_presence = bool(
         active_categories
         & {"player_join", "player_leave", "players_empty", "player_count"}
-    )
-    use_last_join_card = (not has_active_player_count) and (
+    ) or has_numeric_count
+    use_last_join_card = (not has_numeric_count) and (
         "player_join" in active_categories
     )
     players_class = ""
@@ -2264,11 +2267,18 @@ def _ui_view(
     else:
         players_label = "Number of players"
         players = str(monitor.get("player_count")) if players_known else "—"
-        players_hint = "Detected from game log" if players_known else "No count yet"
+        if players_known:
+            players_hint = (
+                "Live count from the game"
+                if status.get("status_probe")
+                else "Detected from game log"
+            )
+        else:
+            players_hint = "No count yet"
     if presence_mode or use_last_join_card:
         players_card_hidden = (not debug_mode) and (not has_active_presence)
     else:
-        players_card_hidden = (not debug_mode) and (not has_active_player_count)
+        players_card_hidden = (not debug_mode) and (not has_numeric_count)
     log_watch_hidden = not debug_mode
     uptime, uptime_hint = _format_uptime(status)
     game_version, game_version_build, game_version_installed = _format_game_version(

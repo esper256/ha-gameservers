@@ -56,9 +56,10 @@ from game_server.package_install import (  # noqa: E402
     read_local_version,
     update_available as package_update_available,
 )
-from game_server.plugin import LogPatterns, load_plugin  # noqa: E402
+from game_server.plugin import LogPatterns, StatusProbeSpec, load_plugin  # noqa: E402
 from game_server.process_manager import ProcessManager  # noqa: E402
 from game_server.steam_gate import SteamGate, SteamPolicy, reset_gate_for_tests  # noqa: E402
+from game_server.status_probe import apply_status_probe  # noqa: E402
 from game_server.status_http import (  # noqa: E402
     DEFAULT_UI_THEME,
     HTML_PAGE,
@@ -603,6 +604,37 @@ class PresenceLeaveResetTests(unittest.TestCase):
             self.assertFalse(mon.state.to_dict()["players_present"])
 
 
+class OccupancyCountModeTests(unittest.TestCase):
+    def test_leave_does_not_clobber_higher_probe_count(self) -> None:
+        plugin = load_plugin(FIXTURE)
+        plugin.log_patterns = LogPatterns(
+            player_join=[r"(?P<player>\S+) joined"],
+            player_leave=[r"(?P<player>\S+) left"],
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            mon = LogMonitor(plugin, tmp)
+            mon.ingest_stdout_line("Ada joined")
+            apply_status_probe(mon.state, {"player_count": 2})
+            self.assertEqual(mon.state.occupancy(), 2)
+            mon.ingest_stdout_line("Ada left")
+            self.assertEqual(mon.state.players, set())
+            self.assertEqual(mon.state.occupancy(), 1)
+            apply_status_probe(mon.state, {"player_count": 0})
+            self.assertEqual(mon.state.occupancy(), 0)
+
+    def test_join_after_probe_zero_occupies(self) -> None:
+        plugin = load_plugin(FIXTURE)
+        plugin.log_patterns = LogPatterns(
+            player_join=[r"(?P<player>\S+) joined"],
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            mon = LogMonitor(plugin, tmp)
+            apply_status_probe(mon.state, {"player_count": 0})
+            self.assertEqual(mon.state.occupancy(), 0)
+            mon.ingest_stdout_line("Ada joined")
+            self.assertEqual(mon.state.occupancy(), 1)
+
+
 class LogFollowIntegrityTests(unittest.TestCase):
     """No gaps / no cross-source duplicate pattern fires while following logs."""
 
@@ -1062,6 +1094,13 @@ class MonitorTests(unittest.TestCase):
             report = mon.pattern_report()
             self.assertGreater(report["dry_run_pattern_count"], 0)
             self.assertTrue(any(item["hits"] > 0 for item in report["patterns"]))
+
+    def test_status_probe_alone_enables_player_tracking(self) -> None:
+        plugin = load_plugin(FIXTURE)
+        plugin.status_probe = StatusProbeSpec(argv=["true"], interval_seconds=10)
+        with tempfile.TemporaryDirectory() as tmp:
+            mon = LogMonitor(plugin, tmp)
+            self.assertTrue(mon.player_tracking_enabled)
 
     def test_empty_pattern_notes_log_only_when_tailer_starts(self) -> None:
         """Ingress /api/ui builds a throwaway LogMonitor every 5s — no spam."""
@@ -3008,6 +3047,8 @@ class StatusFormatTests(unittest.TestCase):
             self.assertEqual(status["lifecycle"], "starting")
             self.assertTrue(status["starting"])
             self.assertIn("waits_for_empty_server", status)
+            self.assertIn("status_probe", status)
+            self.assertFalse(status["status_probe"])
             self.assertNotIn("player_gating", status)
             health = supervisor.health()
             self.assertTrue(health["ok"])
@@ -3584,6 +3625,46 @@ class StatusFormatTests(unittest.TestCase):
         self.assertEqual(counted["players_label"], "Number of players")
         self.assertEqual(counted["players"], "1")
         self.assertEqual(counted["players_hint"], "Detected from game log")
+
+        probe_count = _ui_view(
+            {
+                "running": True,
+                "lifecycle": "running",
+                "debug_mode": False,
+                "waits_for_empty_server": "yes",
+                "player_tracking_mode": "count",
+                "status_probe": True,
+                "log_patterns": {
+                    "player_tracking_enabled": True,
+                    "patterns": [
+                        {
+                            "mode": "active",
+                            "category": "player_join",
+                            "pattern": r"joined",
+                            "hits": 1,
+                            "recent_lines": ["Ada joined the game"],
+                        },
+                        {
+                            "mode": "active",
+                            "category": "player_leave",
+                            "pattern": r"left",
+                            "hits": 0,
+                        },
+                    ],
+                },
+                "monitor": {
+                    "players_known": True,
+                    "player_count": 2,
+                    "players_present": True,
+                    "last_player_join_at": time.time() - 30,
+                },
+            },
+            "ExampleGame",
+        )
+        self.assertFalse(probe_count["players_card_hidden"])
+        self.assertEqual(probe_count["players_label"], "Number of players")
+        self.assertEqual(probe_count["players"], "2")
+        self.assertEqual(probe_count["players_hint"], "Live count from the game")
 
         waiting_count = _ui_view(
             {

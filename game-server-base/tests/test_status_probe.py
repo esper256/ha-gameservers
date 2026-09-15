@@ -66,5 +66,40 @@ class ApplyStatusProbeTests(unittest.TestCase):
         self.assertEqual(state.player_count, 3)
 
 
+class OccupancyTests(unittest.TestCase):
+    def test_asserted_count_outranks_stale_join_names(self) -> None:
+        state = MonitorState()
+        state.players.add("Ada")
+        state.players_known = True
+        state.player_count = 1
+        apply_status_probe(state, {"player_count": 2})
+        self.assertEqual(state.occupancy(), 2)
+        self.assertEqual(state.to_dict()["player_count"], 2)
+        self.assertTrue(state.to_dict()["players_present"])
+        self.assertEqual(state.players, {"Ada"})
+
+    def test_probe_zero_clears_stale_names_and_is_empty(self) -> None:
+        state = MonitorState()
+        state.players.add("Ada")
+        state.players_known = True
+        state.player_count = 1
+        apply_status_probe(state, {"player_count": 0})
+        self.assertEqual(state.occupancy(), 0)
+        self.assertEqual(state.players, set())
+        self.assertFalse(state.to_dict()["players_present"])
+
+    def test_zero_count_ignores_players_list_in_same_payload(self) -> None:
+        state = MonitorState()
+        apply_status_probe(state, {"player_count": 0, "players": ["Ada"]})
+        self.assertEqual(state.occupancy(), 0)
+        self.assertEqual(state.players, set())
+
+    def test_named_joins_cannot_undercount_asserted_headcount(self) -> None:
+        state = MonitorState()
+        apply_status_probe(state, {"player_count": 3})
+        state.players.add("Ada")
+        self.assertEqual(state.occupancy(), 3)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -80,6 +80,49 @@ class MinecraftPluginTests(unittest.TestCase):
         self.assertIn("--guard-upload", plugin.copyparty.before_upload)
         assert plugin.status_probe is not None
         self.assertIn("status-probe", plugin.status_probe.argv)
+        self.assertEqual(plugin.player_tracking_mode, "count")
+        self.assertFalse(plugin.log_patterns.player_count)
+
+    def test_ingress_uses_probe_count_not_last_join(self) -> None:
+        from game_server.status_http import _ui_view
+
+        plugin = load_plugin(PLUGIN)
+        view = _ui_view(
+            {
+                "running": True,
+                "lifecycle": "running",
+                "debug_mode": False,
+                "player_tracking_mode": plugin.player_tracking_mode,
+                "status_probe": plugin.status_probe is not None,
+                "log_patterns": {
+                    "player_tracking_enabled": True,
+                    "patterns": [
+                        {
+                            "mode": "active",
+                            "category": "player_join",
+                            "pattern": plugin.log_patterns.player_join[0],
+                            "hits": 1,
+                        },
+                        {
+                            "mode": "active",
+                            "category": "player_leave",
+                            "pattern": plugin.log_patterns.player_leave[0],
+                            "hits": 0,
+                        },
+                    ],
+                },
+                "monitor": {
+                    "players_known": True,
+                    "player_count": 2,
+                    "players_present": True,
+                },
+            },
+            plugin.name,
+        )
+        self.assertEqual(view["players_label"], "Number of players")
+        self.assertEqual(view["players"], "2")
+        self.assertEqual(view["players_hint"], "Live count from the game")
+        self.assertFalse(view["players_card_hidden"])
 
     def test_config_version_matches_supervisor(self) -> None:
         import yaml

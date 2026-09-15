@@ -1,5 +1,9 @@
 # Changelog
 
+## 3.14.0
+
+- OPEN WEB UI shows how many people are playing. Restarts wait until that live count is 0.
+
 ## 3.13.0
 
 - A proven boot keeps the snapshot the server actually ran. A bad upload or pin that crashes before that boots the last proven snapshot without changing the upload folder.

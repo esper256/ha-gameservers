@@ -83,6 +83,9 @@ class MonitorState:
     players: set[str] = field(default_factory=set)
     player_count: int | None = None
     players_known: bool = False
+    # True after a headcount line or status_probe asserted player_count.
+    # Join/leave names stay a roster; they must not replace that headcount.
+    player_count_asserted: bool = False
     ready: bool = False
     # Human-readable game version announced in logs (e.g. "1.3.1").
     game_version: str | None = None
@@ -101,17 +104,25 @@ class MonitorState:
     )
     started_at: float = field(default_factory=time.time)
 
+    def occupancy(self) -> int | None:
+        """Known player count. Prefers an asserted headcount over named joins."""
+
+        if self.players_known and self.player_count is not None:
+            count = int(self.player_count)
+            if self.players:
+                return max(count, len(self.players))
+            return count
+        if self.players:
+            return len(self.players)
+        return None
+
     def to_dict(self) -> dict[str, Any]:
-        count = len(self.players) if self.players else self.player_count
+        count = self.occupancy()
         return {
             "players": sorted(self.players),
             "player_count": count,
             # True when at least one player is known to be online (count or set).
-            "players_present": (
-                bool(self.players)
-                if self.players
-                else (None if count is None else int(count) > 0)
-            ),
+            "players_present": None if count is None else count > 0,
             "players_known": self.players_known,
             "last_player_join_at": self.last_player_join_at,
             "ready": self.ready,
@@ -187,8 +198,9 @@ class LogMonitor:
 
         if not self.player_tracking_enabled:
             LOG.warning(
-                "No active player log patterns configured; updates will not wait "
-                "for an empty server. Dry-run candidates will only highlight lines."
+                "No active player log patterns or status_probe configured; "
+                "updates will not wait for an empty server. Dry-run candidates "
+                "will only highlight lines."
             )
         if not self.version_mismatch_enabled:
             LOG.info(
@@ -219,12 +231,14 @@ class LogMonitor:
     @property
     def player_tracking_enabled(self) -> bool:
         active = plugin_patterns_as_dict(self.plugin)
-        return bool(
+        if (
             active.get("player_join")
             or active.get("player_leave")
             or active.get("player_count")
             or active.get("players_empty")
-        )
+        ):
+            return True
+        return getattr(self.plugin, "status_probe", None) is not None
 
     @property
     def player_tracking_mode(self) -> str:
@@ -465,7 +479,10 @@ class LogMonitor:
                 # Occupied — exact headcount unknown / unused.
                 self.state.player_count = max(1, len(self.state.players))
             else:
-                self.state.player_count = len(self.state.players)
+                # Never drop an asserted probe/log headcount below named joins.
+                self.state.player_count = max(
+                    self.state.player_count or 0, len(self.state.players)
+                )
 
         if "player_leave" in active_hits:
             match = active_hits["player_leave"]
@@ -492,6 +509,11 @@ class LogMonitor:
                     # keeping occupancy forever was leaving updates stuck.
                     self.state.players.clear()
                     self.state.player_count = 0
+            elif self.state.player_count_asserted:
+                current = int(self.state.player_count or 0)
+                if removed:
+                    current = max(0, current - 1)
+                self.state.player_count = max(current, len(self.state.players))
             else:
                 self.state.player_count = len(self.state.players)
 
@@ -499,6 +521,7 @@ class LogMonitor:
             self.state.players.clear()
             self.state.player_count = 0
             self.state.players_known = True
+            self.state.player_count_asserted = True
 
         if "player_count" in active_hits:
             match = active_hits["player_count"]
@@ -509,6 +532,7 @@ class LogMonitor:
                 try:
                     self.state.player_count = int(raw)
                     self.state.players_known = True
+                    self.state.player_count_asserted = True
                     if self.state.player_count <= 0:
                         self.state.players.clear()
                 except ValueError:
