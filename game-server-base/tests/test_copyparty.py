@@ -72,6 +72,8 @@ class CopypartyPublisherTests(unittest.TestCase):
             leftover.write_bytes(b"")
             empty = world_mods / "empty.jar"
             empty.write_bytes(b"")
+            leftover_txt = world_mods / "empty.dat"
+            leftover_txt.write_bytes(b"")
             spec = CopypartySpec.from_dict(
                 {
                     "port": 8765,
@@ -107,6 +109,7 @@ class CopypartyPublisherTests(unittest.TestCase):
             self.assertIn("mods: secret", text)
             self.assertFalse(leftover.exists())
             self.assertFalse(empty.exists())
+            self.assertFalse(leftover_txt.exists())
             upload = (root / "state" / "copyparty" / "on-upload.sh").read_text(
                 encoding="utf-8"
             )

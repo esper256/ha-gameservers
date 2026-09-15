@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Supervisor owns Copyparty (mod uploads on the live mods folder).
+# Supervisor owns Copyparty (mod-upload page on uploaded_mods, snapshot at launch).
 set -euo pipefail
 
 VERSION="${APP_VERSION:-}"
@@ -29,8 +29,7 @@ export PATH="/opt/java/bin:/opt/mc-image-helper/bin:${PATH}"
 
 export MOD_PUBLISHER_DIR="${MOD_PUBLISHER_DIR:-/data/mod-publisher}"
 mkdir -p /data/worlds /data/logs /data/backups /data/supervisor /data/installs \
-  "${MOD_PUBLISHER_DIR}/incoming" "${MOD_PUBLISHER_DIR}/history" \
-  "${MOD_PUBLISHER_DIR}/quarantine"
+  "${MOD_PUBLISHER_DIR}/history" "${MOD_PUBLISHER_DIR}/quarantine"
 export HOME="${STATE_DIR}"
 
 if [ -f "${OPTIONS_FILE}" ]; then
@@ -40,6 +39,6 @@ else
 fi
 
 python3 /opt/haos_defaults.py write-copyparty-banner
-echo "Copyparty file-drop on TCP ${PUBLISHER_PORT} (live mods folder, supervisor)"
+echo "Copyparty file-drop on TCP ${PUBLISHER_PORT} (upload folder, supervisor)"
 
 exec python3 -m game_server --plugin "${GAME_PLUGIN}"
