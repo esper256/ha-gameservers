@@ -19,7 +19,11 @@ World switch/create, backups, restore, status. Home Assistant Ingress — no ext
 
 ## Kid uploads
 
-Open `http://<home-assistant-host>:8765/`, sign in with the publisher password, drop a JAR. Same mod id replaces the previous build even if the filename or `0.0.1` version never changes. Several drops in a minute become one restart.
+Open `http://<home-assistant-host>:8765/`, sign in with the publisher password.
+
+The home page is an **inbox**. Drop a JAR to add or replace a mod (same mod id replaces the last build). The file is removed from this folder after it installs — that does not mean the mod is gone.
+
+**Installed mods** (`/mods/`) is the live `mods/` folder for the current world. Delete a jar there to take it off the server (not AutoModpack / Fabric API). The game restarts; relaunch Minecraft if AutoModpack asks.
 
 Do not upload AutoModpack or Fabric API — those are protected.
 

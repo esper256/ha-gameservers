@@ -153,18 +153,37 @@ class PublishModTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             os.environ["MOD_PUBLISHER_DIR"] = str(root)
+            os.environ["DATA_DIR"] = str(root / "worlds")
             os.environ["PUBLISHER_PASSWORD"] = "secret"
             try:
                 self.assertEqual(haos_defaults.cmd_write_copyparty_config(), 0)
             finally:
                 os.environ.pop("PUBLISHER_PASSWORD", None)
+                os.environ.pop("DATA_DIR", None)
             conf = (root / "copyparty.conf").read_text(encoding="utf-8")
             self.assertIn("xau:", conf)
-            self.assertIn("flags:", conf)
+            self.assertIn("[/mods]", conf)
+            self.assertIn("xbd:", conf)
+            self.assertIn("xau:", conf)
             self.assertIn("e2dsa", conf)
-            self.assertNotIn("xbu:", conf)
-            self.assertNotIn("{p}", conf)
-            self.assertTrue((root / "on-upload.sh").is_file())
+            self.assertTrue((root / "incoming" / ".prologue.html").is_file())
+            self.assertTrue((root / "installed").is_symlink())
+            self.assertTrue((root / "on-delete-guard.sh").is_file())
+
+    def test_guard_delete_protects_automodpack(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            mods = root / "worlds" / "FamilyWorld" / "mods"
+            mods.mkdir(parents=True)
+            protected = mods / "automodpack.jar"
+            _jar(protected, fabric=False, mod_id="automodpack")
+            kid = mods / "cool_creepers.jar"
+            _jar(kid, fabric=True)
+            os.environ["DATA_DIR"] = str(root / "worlds")
+            os.environ["STATE_DIR"] = str(root / "state")
+            Path(os.environ["STATE_DIR"]).mkdir(exist_ok=True)
+            self.assertEqual(publish_mod.guard_delete(protected), 2)
+            self.assertEqual(publish_mod.guard_delete(kid), 0)
 
 
 class LaunchLinkTests(unittest.TestCase):

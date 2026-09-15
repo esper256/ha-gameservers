@@ -67,6 +67,31 @@ def worlds_dir() -> Path:
     return Path(os.environ.get("DATA_DIR") or "/data/worlds")
 
 
+def publisher_root() -> Path:
+    return Path(os.environ.get("MOD_PUBLISHER_DIR") or "/data/mod-publisher")
+
+
+def sync_active_mods_link() -> Path:
+    """Point Copyparty /mods at the live world's mods folder."""
+
+    target = profile_dir() / "mods"
+    target.mkdir(parents=True, exist_ok=True)
+    root = publisher_root()
+    root.mkdir(parents=True, exist_ok=True)
+    link = root / "installed"
+    if link.is_symlink():
+        try:
+            if link.resolve() == target.resolve():
+                return link
+        except OSError:
+            pass
+        link.unlink()
+    elif link.exists():
+        return link
+    link.symlink_to(target)
+    return link
+
+
 def state_dir() -> Path:
     return Path(os.environ.get("STATE_DIR") or "/data/supervisor")
 
@@ -237,6 +262,7 @@ def cmd_prepare_world() -> int:
     _write_server_properties(directory)
     _link_install(directory, loader, version)
     _seed_infrastructure(directory, loader, version)
+    sync_active_mods_link()
     return 0
 
 
@@ -363,6 +389,7 @@ def cmd_run() -> int:
     version = str(profile.get("minecraft_version") or minecraft_version())
     install = install_dir() / f"{loader}-{version}"
     _link_install(directory, loader, version)
+    sync_active_mods_link()
     java_opts = env_or_option("java_opts", "-Xms2G -Xmx4G")
     os.chdir(directory)
     cmd = ["java", *java_opts.split()]
@@ -400,18 +427,47 @@ def fabric_launcher_jar(install: Path, directory: Path) -> Path | None:
 def cmd_write_copyparty_config() -> int:
     password = env_or_option("publisher_password", "family")
     port = env_or_option("publisher_port", os.environ.get("PUBLISHER_PORT") or "8765")
-    root = Path(os.environ.get("MOD_PUBLISHER_DIR") or "/data/mod-publisher")
+    root = publisher_root()
     incoming = root / "incoming"
     incoming.mkdir(parents=True, exist_ok=True)
+    installed = sync_active_mods_link()
     hook = root / "on-upload.sh"
     hook.write_text(
         '#!/bin/sh\nexec python3 /opt/publish_mod.py "$1"\n',
         encoding="utf-8",
     )
     hook.chmod(0o755)
-    # Keep the config out of the incoming share so kids cannot edit it.
-    # xau is after-upload and receives the filesystem path as argv[1].
-    # Copyparty refuses xau unless file indexing (e2dsa) is on.
+    guard = root / "on-delete-guard.sh"
+    guard.write_text(
+        '#!/bin/sh\nexec python3 /opt/publish_mod.py --guard-delete "$1"\n',
+        encoding="utf-8",
+    )
+    guard.chmod(0o755)
+    after_del = root / "on-delete.sh"
+    after_del.write_text(
+        '#!/bin/sh\nexec python3 /opt/publish_mod.py --after-delete "$1"\n',
+        encoding="utf-8",
+    )
+    after_del.chmod(0o755)
+    # Dotfile: kids have no "dots" permission, so they cannot delete the banner.
+    (incoming / ".prologue.html").write_text(
+        """\
+<div style="max-width:42rem;margin:1rem 0 1.25rem;padding:1rem 1.15rem;\
+background:#241c12;color:#f2e6c9;border-left:4px solid #5aad32;\
+font-family:sans-serif;line-height:1.45">
+  <strong>Family Minecraft mods</strong>
+  <p style="margin:0.6rem 0 0">You are in the right place. Drop a
+  <code>.jar</code> here to <em>add or replace</em> a mod. The same mod id
+  replaces the last build even if the filename is different. After it
+  installs, the file leaves this folder (it is an inbox, not the mod list).</p>
+  <p style="margin:0.6rem 0 0">To take a mod off the server, open
+  <a href="/mods/">Installed mods</a> and delete its jar (not AutoModpack).
+  The server restarts after a change. Then relaunch Minecraft if AutoModpack
+  asks.</p>
+</div>
+""",
+        encoding="utf-8",
+    )
     (root / "copyparty.conf").write_text(
         f"""\
 [global]
@@ -430,6 +486,16 @@ def cmd_write_copyparty_config() -> int:
   flags:
     e2dsa
     xau: {hook}
+
+[/mods]
+  {installed}
+  accs:
+    r: kids
+    d: kids
+  flags:
+    e2dsa
+    xbd: c,{guard}
+    xad: {after_del}
 """,
         encoding="utf-8",
     )

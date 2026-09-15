@@ -1,5 +1,9 @@
 # Changelog
 
+## 3.8.2
+
+- Copyparty landing banner explains the inbox; `/mods` lists the active world’s jars for delete (AutoModpack protected, then a game restart).
+
 ## 3.8.1
 
 - Enable Copyparty `e2dsa` so the post-upload `xau` hook actually runs (without it, JAR drops never reach `publish_mod.py`).
