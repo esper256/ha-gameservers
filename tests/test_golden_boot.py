@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Golden boot contract. Skipped until Minecraft-layer restore ships."""
+"""Golden boot: stock ready, extra mods need a player, unproven crash falls back."""
 
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ import publish_mod  # noqa: E402
 
 # Flip when restore is wired: stock ready promotes; extra/pin/loader need a
 # player; unproven crash boots golden_mods without rewriting uploaded_mods.
-GOLDEN_ROLLBACK_IMPLEMENTED = False
+GOLDEN_ROLLBACK_IMPLEMENTED = True
 
 
 def _jar(path: Path, *, fabric: bool = True, mod_id: str = "cool_creepers") -> None:
@@ -96,6 +96,7 @@ class GoldenBootContractTests(unittest.TestCase):
             "MINECRAFT_VERSION",
             "JAVA_OPTS",
             "MOD_PUBLISHER_DIR",
+            "SERVER_PORT",
         ):
             os.environ.pop(key, None)
 
@@ -109,6 +110,7 @@ class GoldenBootContractTests(unittest.TestCase):
         os.environ["INSTALL_DIR"] = str(installs)
         os.environ["MINECRAFT_VERSION"] = version
         os.environ["JAVA_OPTS"] = "-Xms32M"
+        os.environ["SERVER_PORT"] = "25565"
         Path(os.environ["STATE_DIR"]).mkdir(parents=True, exist_ok=True)
         _fake_neoforge(installs, "1.21.1")
         _fake_neoforge(installs, "1.21.11")

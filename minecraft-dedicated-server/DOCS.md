@@ -23,7 +23,7 @@ Open `http://<home-assistant-host>:<upload-host-port>/` (the host port on **Netw
 
 This site is the **upload** folder (`uploaded_mods/`), not the running server’s `mods/` snapshot. Drop a JAR to add or replace a mod (same mod id replaces the last build even if the filename is different). The jar must match this world’s **Minecraft version** (the Configuration pin) and **loader**. Do not upload NeoForge/Fabric installer jars; those are the world type, not a mod.
 
-Minecraft stages a snapshot of the upload folder into `mods/` when the JVM starts. Delete a jar on the same page to take it off the next restart (not AutoModpack / Fabric API). If nobody is connected, the game restarts after a short pause so several jars can land together. If anyone is playing, it waits until the last player leaves, then restarts. Relaunch Minecraft if AutoModpack asks. If Minecraft crash-loops, the add-on and upload page stay up.
+Minecraft stages a snapshot of the upload folder into `mods/` when trying a new pin or upload set. Delete a jar on the same page to take it off the next *attempt* (not AutoModpack / Fabric API). If nobody is connected, the game restarts after a short pause so several jars can land together. If anyone is playing, it waits until the last player leaves, then restarts. Relaunch Minecraft if AutoModpack asks. If a new pin or upload crashes before it is proven, the last proven snapshot starts again; the upload folder is left as your next experiment. Home Assistant restarts the add-on if even that snapshot will not start.
 
 Do not upload AutoModpack or Fabric API — those are protected.
 
