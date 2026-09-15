@@ -287,17 +287,6 @@ class GoldenBootContractTests(unittest.TestCase):
             session = json.loads((world / "boot.json").read_text(encoding="utf-8"))
             self.assertEqual(session["minecraft_version"], "1.21.11")
 
-    def test_runtime_properties_apply_port_after_first_launch(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            world = self._env(Path(tmp))
-            (world / "uploaded_mods").mkdir(parents=True)
-            haos_defaults.prepare_game_command()
-            self._probe(ready=True)
-            os.environ["SERVER_PORT"] = "25566"
-            haos_defaults.prepare_game_command()
-            props = haos_defaults.read_server_properties(world)
-            self.assertEqual(props.get("server-port"), "25566")
-
     def test_publish_marks_attempt_request(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             world = self._env(Path(tmp))

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import errno
+import io
 import json
 import os
 import shutil
@@ -687,6 +688,64 @@ class HaVersionPinTests(unittest.TestCase):
             self.assertEqual(seed.call_args.args[1], "neoforge")
             self.assertEqual(seed.call_args.args[2], "1.21.11")
 
+    def test_options_json_pin_beats_stale_env(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            world = self._env(Path(tmp), "1.21.1")
+            (world / "attempt_state.json").write_text(
+                json.dumps(
+                    {
+                        "last_attempt_ha_version": "1.21.1",
+                        "last_attempt_loader": "neoforge",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (world / "golden.json").write_text(
+                json.dumps(
+                    {
+                        "loader": "neoforge",
+                        "minecraft_version": "1.21.1",
+                        "stock": True,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (world / "golden_mods").mkdir()
+            options = Path(tmp) / "options.json"
+            options.write_text(
+                json.dumps({"minecraft_version": "1.21.11"}), encoding="utf-8"
+            )
+            os.environ["OPTIONS_FILE"] = str(options)
+            os.environ["MINECRAFT_VERSION"] = "1.21.1"
+            self.assertEqual(haos_defaults.minecraft_version(), "1.21.11")
+            cmd = haos_defaults.prepare_game_command()
+            self.assertIsNotNone(cmd)
+            session = json.loads((world / "boot.json").read_text(encoding="utf-8"))
+            self.assertEqual(session.get("mode"), "attempt")
+            self.assertEqual(session.get("minecraft_version"), "1.21.11")
+            self.assertTrue((world / "server.jar").is_symlink() or (world / "server.jar").exists())
+            target = (world / "server.jar").resolve()
+            self.assertIn("neoforge-1.21.11", str(target))
+
+    def test_missing_pin_tree_runs_install(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            world = self._env(Path(tmp), "1.21.1")
+            os.environ["MINECRAFT_VERSION"] = "1.21.11"
+            shutil.rmtree(Path(os.environ["INSTALL_DIR"]) / "neoforge-1.21.11")
+
+            def _install() -> int:
+                inst = Path(os.environ["INSTALL_DIR"]) / "neoforge-1.21.11"
+                inst.mkdir(parents=True)
+                (inst / "server.jar").write_bytes(b"starter")
+                (inst / "run.sh").write_text("#!/bin/sh\n", encoding="utf-8")
+                return 0
+
+            with patch.object(haos_defaults, "cmd_install", side_effect=_install) as install:
+                cmd = haos_defaults.prepare_game_command()
+            install.assert_called_once()
+            self.assertIsNotNone(cmd)
+            self.assertTrue((world / "server.jar").exists())
+
     def test_unchanged_pin_keeps_loader(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             world = self._env(Path(tmp), "1.21.1")
@@ -700,7 +759,9 @@ class HaVersionPinTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             self._env(Path(tmp), "1.99.9")
             os.environ["MINECRAFT_VERSION"] = "1.99.9"
-            cmd = haos_defaults.prepare_game_command()
+            with patch.object(haos_defaults, "cmd_install", return_value=0) as install:
+                cmd = haos_defaults.prepare_game_command()
+            install.assert_called_once()
             self.assertIsNone(cmd)
 
 
@@ -746,6 +807,10 @@ class LaunchLinkTests(unittest.TestCase):
 
 
 class StatusProbeTests(unittest.TestCase):
+    def tearDown(self) -> None:
+        for key in ("DATA_DIR", "STATE_DIR", "SERVER_PORT"):
+            os.environ.pop(key, None)
+
     def test_list_response_and_status_json_omit(self) -> None:
         self.assertEqual(
             haos_defaults.parse_java_list_response(
@@ -773,6 +838,27 @@ class StatusProbeTests(unittest.TestCase):
             25566,
         )
         self.assertIsNone(haos_defaults._bind_port({}, "server-port", "MISSING_PORT"))
+
+    def test_probe_uses_status_ping_not_rcon(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            os.environ["DATA_DIR"] = str(Path(tmp) / "worlds")
+            os.environ["STATE_DIR"] = str(Path(tmp) / "state")
+            os.environ["SERVER_PORT"] = "25565"
+            Path(os.environ["STATE_DIR"]).mkdir(parents=True)
+            (Path(os.environ["DATA_DIR"]) / "World").mkdir(parents=True)
+            buf = io.StringIO()
+            with patch.object(
+                haos_defaults,
+                "minecraft_status_payload",
+                return_value={"ready": True, "player_count": 2, "game_version": "1.21.1"},
+            ):
+                with patch.object(haos_defaults, "rcon_command") as rcon:
+                    with patch("sys.stdout", buf):
+                        self.assertEqual(haos_defaults.cmd_status_probe(), 0)
+            rcon.assert_not_called()
+            payload = json.loads(buf.getvalue())
+            self.assertEqual(payload.get("player_count"), 2)
+            self.assertTrue(payload.get("ready"))
 
 
 if __name__ == "__main__":
