@@ -1,5 +1,9 @@
 # Changelog
 
+## 3.8.3
+
+- Slim Copyparty: hide the top menu (media player, search, unpost), REPL, control panel, sidebar tree, zip/thumbnails/transcode. Login and `/mods` breadcrumbs stay.
+
 ## 3.8.2
 
 - Copyparty landing banner explains the inbox; `/mods` lists the active world’s jars for delete (AutoModpack protected, then a game restart).

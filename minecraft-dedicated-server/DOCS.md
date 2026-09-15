@@ -19,7 +19,7 @@ World switch/create, backups, restore, status. Home Assistant Ingress — no ext
 
 ## Kid uploads
 
-Open `http://<home-assistant-host>:8765/`, sign in with the publisher password.
+Open `http://<home-assistant-host>:8765/`, sign in with the publisher password. The page is a file drop, not a media site: the player, search, zip, and other Copyparty extras are turned off.
 
 The home page is an **inbox**. Drop a JAR to add or replace a mod (same mod id replaces the last build). The file is removed from this folder after it installs — that does not mean the mod is gone.
 

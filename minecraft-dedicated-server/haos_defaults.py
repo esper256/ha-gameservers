@@ -475,6 +475,20 @@ font-family:sans-serif;line-height:1.45">
   e2dsa
   no-crt
   hist: {root / "cphist"}
+  name: Family Minecraft mods
+  doctitle: Family Minecraft mods
+  no-thumb
+  no-acode
+  no-zip
+  no-lifetime
+  unpost: 0
+  unp-who: 0
+  ui-nombar
+  ui-nosrvi
+  ui-notree
+  ui-nolbar
+  ui-noctxb
+  ui-norepl
 
 [accounts]
   kids: {password}
