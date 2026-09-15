@@ -697,11 +697,12 @@ class HaVersionPinTests(unittest.TestCase):
             with patch.object(haos_defaults, "_seed_infrastructure", return_value=None):
                 self.assertEqual(haos_defaults.cmd_prepare_world(), 0)
             profile = json.loads((world / "profile.json").read_text(encoding="utf-8"))
-            self.assertEqual(profile["minecraft_version"], "1.21.11")
             self.assertEqual(profile["loader"], "neoforge")
+            self.assertNotIn("minecraft_version", profile)
             self.assertFalse((world / "mods").exists())
             cmd = haos_defaults.prepare_game_command()
             self.assertIsNotNone(cmd)
+            self.assertEqual(haos_defaults.current_install(world), ("neoforge", "1.21.11"))
             self.assertTrue((world / "server.jar").exists())
             self.assertTrue((Path(os.environ["INSTALL_DIR"]) / "neoforge-1.21.1").is_dir())
             self.assertTrue((Path(os.environ["INSTALL_DIR"]) / "neoforge-1.21.11").is_dir())
@@ -714,14 +715,14 @@ class HaVersionPinTests(unittest.TestCase):
             (uploaded / "automodpack.jar").write_bytes(b"old-seed")
             os.chmod(uploaded / "automodpack.jar", 0o444)
             with patch.object(haos_defaults, "_seed_infrastructure", return_value=None):
-                with patch.object(haos_defaults, "_link_install", return_value=None):
-                    self.assertEqual(haos_defaults.cmd_prepare_world(), 0)
+                self.assertEqual(haos_defaults.cmd_prepare_world(), 0)
+            haos_defaults._link_install(world, "neoforge", "1.21.1")
+            self.assertEqual(haos_defaults.current_install(world), ("neoforge", "1.21.1"))
             _write_ha_pin(Path(tmp), "1.21.11")
             with patch.object(haos_defaults, "_seed_infrastructure") as seed:
-                with patch.object(haos_defaults, "_link_install", return_value=None):
-                    self.assertEqual(haos_defaults.cmd_prepare_world(), 0)
+                self.assertEqual(haos_defaults.cmd_prepare_world(), 0)
             profile = json.loads((world / "profile.json").read_text(encoding="utf-8"))
-            self.assertEqual(profile["minecraft_version"], "1.21.11")
+            self.assertEqual(profile["loader"], "neoforge")
             self.assertFalse((uploaded / "automodpack.jar").exists())
             seed.assert_called_once()
             self.assertEqual(seed.call_args.args[1], "neoforge")
@@ -814,7 +815,7 @@ class HaVersionPinTests(unittest.TestCase):
                 self.assertEqual(haos_defaults.cmd_prepare_world(), 0)
             profile = json.loads((world / "profile.json").read_text(encoding="utf-8"))
             self.assertEqual(profile["loader"], "neoforge")
-            self.assertEqual(profile["minecraft_version"], "1.21.1")
+            self.assertNotIn("minecraft_version", profile)
 
     def test_missing_install_fails_clearly(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

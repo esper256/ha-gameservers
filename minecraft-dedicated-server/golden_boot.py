@@ -1,8 +1,8 @@
-"""Last-known-good boot: sealed mods + Minecraft version + loader.
+"""Last-known-good snapshot: hardlinked mods + a link to the install they use.
 
-uploaded_mods/ is the next experiment (Copyparty). An attempt snapshots that
-folder into mods/ once; that tree is immutable for the JVM. Golden preserves
-that snapshot and releases the previous golden. Minecraft-layer only.
+uploaded_mods/ is the next Copyparty experiment. An attempt snapshots that
+folder into mods/ once; that tree is immutable for the JVM. Golden is the
+last proven copy of that snapshot. Minecraft-layer only.
 """
 
 from __future__ import annotations
@@ -14,8 +14,11 @@ from typing import Any, Literal
 
 from haos_defaults import (
     PROTECTED_MOD_IDS,
+    current_install,
     install_snapshot,
+    install_tree,
     mods_snapshot_dir,
+    parse_install_ref,
     sealed_jars,
     uploaded_mods_dir,
     write_json,
@@ -23,6 +26,7 @@ from haos_defaults import (
 
 GOLDEN_DIR = "golden_mods"
 GOLDEN_META = "golden.json"
+GOLDEN_INSTALL = "golden_install"
 BOOT_SESSION = "boot.json"
 ATTEMPT_REQUEST = "attempt.request"
 
@@ -73,21 +77,48 @@ def _read_json(path: Path) -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
-def load_golden_meta(directory: Path) -> dict[str, Any] | None:
+def load_golden_install(directory: Path) -> tuple[str, str] | None:
+    """Install the golden snapshot points at (symlink, else legacy golden.json)."""
+
+    link = directory / GOLDEN_INSTALL
+    if link.exists() or link.is_symlink():
+        try:
+            ref = parse_install_ref(link.resolve())
+        except OSError:
+            ref = None
+        if ref:
+            return ref
     data = _read_json(directory / GOLDEN_META)
-    if not data:
-        return None
-    if not str(data.get("minecraft_version") or "").strip():
-        return None
-    if not str(data.get("loader") or "").strip():
-        return None
+    loader = str(data.get("loader") or "").strip().lower()
+    version = str(data.get("minecraft_version") or "").strip()
+    if loader in {"neoforge", "fabric"} and version:
+        return loader, version
+    return None
+
+
+def load_golden_meta(directory: Path) -> dict[str, Any] | None:
     if not (directory / GOLDEN_DIR).is_dir():
         return None
+    ref = load_golden_install(directory)
+    if ref is None:
+        return None
+    loader, version = ref
+    data = _read_json(directory / GOLDEN_META)
+    data["loader"] = loader
+    data["minecraft_version"] = version
     return data
 
 
 def has_golden(directory: Path) -> bool:
-    return load_golden_meta(directory) is not None
+    return load_golden_install(directory) is not None and (directory / GOLDEN_DIR).is_dir()
+
+
+def write_golden_install(directory: Path, *, loader: str, version: str) -> None:
+    dest = directory / GOLDEN_INSTALL
+    target = install_tree(loader, version)
+    if dest.is_symlink() or dest.exists():
+        dest.unlink()
+    dest.symlink_to(target)
 
 
 def load_boot_session(directory: Path) -> dict[str, Any]:
@@ -97,53 +128,73 @@ def load_boot_session(directory: Path) -> dict[str, Any]:
 def attempt_needs_player(
     directory: Path,
     *,
-    ha_version: str,
-    loader: str,
+    ha_version: str = "",
+    loader: str = "",
     snapshot: Path | None = None,
 ) -> bool:
-    """True when this combo is not the stock first configuration."""
+    """True when the snapshot has extra player jars (not stock AutoModpack only)."""
 
     folder = snapshot if snapshot is not None else uploaded_mods_dir(directory)
-    if extra_player_jars(folder):
+    return bool(extra_player_jars(folder))
+
+
+def _jar_sig(path: Path) -> tuple[str, int, int]:
+    st = path.stat()
+    return (path.name, st.st_dev, st.st_ino)
+
+
+def uploads_match_snapshot(directory: Path) -> bool:
+    """True when mods/ is already the Copyparty jar set."""
+
+    uploaded = sealed_jars(uploaded_mods_dir(directory))
+    snap = sealed_jars(mods_snapshot_dir(directory))
+    if not snap and not uploaded:
         return True
-    meta = load_golden_meta(directory)
-    if meta is None:
+    try:
+        if sorted(_jar_sig(p) for p in uploaded) == sorted(_jar_sig(p) for p in snap):
+            return True
+    except OSError:
         return False
-    return (
-        str(meta.get("minecraft_version") or "").strip() != str(ha_version)
-        or str(meta.get("loader") or "").strip() != str(loader)
-    )
+    names_u = sorted(p.name for p in uploaded)
+    names_s = sorted(p.name for p in snap)
+    if names_u != names_s:
+        return False
+    try:
+        return sorted((p.name, p.stat().st_size) for p in uploaded) == sorted(
+            (p.name, p.stat().st_size) for p in snap
+        )
+    except OSError:
+        return False
 
 
-def _pin_matches(payload: dict[str, Any], *, ha_version: str, loader: str) -> bool:
-    return (
-        str(payload.get("minecraft_version") or "").strip() == str(ha_version)
-        and str(payload.get("loader") or "").strip() == str(loader)
-    )
+def should_restage(directory: Path, *, loader: str, version: str) -> bool:
+    """New untested snapshot when the install link or Copyparty set is not current."""
+
+    if attempt_requested(directory):
+        return True
+    if not mods_snapshot_dir(directory).is_dir():
+        return True
+    if current_install(directory) != (loader, version):
+        return True
+    if uploads_match_snapshot(directory):
+        return False
+    session = load_boot_session(directory)
+    if str(session.get("mode") or "") == "golden" and has_golden(directory):
+        return False
+    return True
 
 
 def choose_boot_mode(
-    directory: Path, *, ha_version: str, loader: str
+    directory: Path, *, ha_version: str = "", loader: str = ""
 ) -> BootMode:
-    """attempt = HA options.json pin + uploads; golden = last-known-good after a crash."""
+    """golden = last proven snapshot after an untested crash; else try the live snapshot."""
 
-    if attempt_requested(directory):
-        return "attempt"
     session = load_boot_session(directory)
     unproven_attempt = (
         str(session.get("mode") or "") == "attempt"
         and not bool(session.get("proven"))
     )
-    meta = load_golden_meta(directory)
-    # Crash fallback: this HA pin just died unproven. Boot the last proven snapshot.
-    if (
-        unproven_attempt
-        and meta is not None
-        and _pin_matches(session, ha_version=ha_version, loader=loader)
-    ):
-        return "golden"
-    # Desired pin differs from the proven snapshot (or there is none): try HA config.
-    if meta is not None and _pin_matches(meta, ha_version=ha_version, loader=loader):
+    if unproven_attempt and has_golden(directory):
         return "golden"
     return "attempt"
 
@@ -205,10 +256,13 @@ def _maybe_promote(directory: Path, session: dict[str, Any]) -> None:
 
 
 def _promote(directory: Path, session: dict[str, Any]) -> None:
-    loader = str(session.get("loader") or "neoforge")
-    version = str(session.get("minecraft_version") or "")
+    ref = current_install(directory)
+    loader = (ref[0] if ref else str(session.get("loader") or "neoforge"))
+    version = (ref[1] if ref else str(session.get("minecraft_version") or ""))
     dest = directory / GOLDEN_DIR
     install_snapshot(mods_snapshot_dir(directory), dest)
+    if loader and version:
+        write_golden_install(directory, loader=loader, version=version)
     write_json(
         directory / GOLDEN_META,
         {

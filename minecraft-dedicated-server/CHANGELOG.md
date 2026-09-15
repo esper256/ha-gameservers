@@ -1,5 +1,9 @@
 # Changelog
 
+## 3.14.4
+
+- The version on Configuration is only `/data/options.json`. Startup downloads that install if it is missing. Copyparty uploads that already match the current `mods/` hardlink snapshot launch as-is; a mismatch or a different install link makes a new untested snapshot. A crash restores the last proven snapshot (hardlinks + install link). That proven snapshot is the only extra mutable copy.
+
 ## 3.14.3
 
 - The Minecraft version on Configuration lives only in `/data/options.json`. Logs print that pin and its file path. Compose can still set `MINECRAFT_VERSION` when the file is absent. A crash still boots the last proven snapshot; there is no second saved copy of the pin.

@@ -15,6 +15,7 @@ import subprocess
 import sys
 from pathlib import Path
 from typing import Any
+from urllib.request import Request, urlopen
 
 HELPER = Path("/opt/mc-image-helper/bin/mc-image-helper")
 STARTER_JAR = Path("/opt/server-starter.jar")
@@ -446,18 +447,7 @@ def cmd_prepare_world() -> int:
         loader = "neoforge"
     version = minecraft_version()
     print(explain_minecraft_pin(), flush=True)
-    last_applied = str(profile.get("minecraft_version") or "").strip()
-    pin_changed = (
-        last_applied != version
-        or str(profile.get("loader") or "").strip().lower() != loader
-    )
-    write_json(
-        directory / "profile.json",
-        {
-            "loader": loader,
-            "minecraft_version": version,
-        },
-    )
+    write_json(directory / "profile.json", {"loader": loader})
     (directory / "world").mkdir(parents=True, exist_ok=True)
     (directory / "config").mkdir(parents=True, exist_ok=True)
     migrate_legacy_mods(directory)
@@ -467,8 +457,8 @@ def cmd_prepare_world() -> int:
         f"eula={'true' if eula else 'false'}\n", encoding="utf-8"
     )
     _write_server_properties(directory)
-    _link_install(directory, loader, version)
-    if pin_changed:
+    current = current_install(directory)
+    if current is not None and current != (loader, version):
         _clear_seeded_infrastructure(directory)
     _seed_infrastructure(directory, loader, version)
     cmd_write_copyparty_banner()
@@ -627,6 +617,44 @@ def install_tree(loader: str, version: str) -> Path:
     return install_dir() / f"{loader}-{version}"
 
 
+def parse_install_ref(path: Path) -> tuple[str, str] | None:
+    """Read loader+version from an install directory name (``neoforge-1.21.1``)."""
+
+    name = path.name
+    for loader in ("neoforge", "fabric"):
+        prefix = f"{loader}-"
+        if not name.startswith(prefix):
+            continue
+        version = _normalize_mc_version(name[len(prefix) :])
+        if version:
+            return loader, version
+    return None
+
+
+def current_install(directory: Path) -> tuple[str, str] | None:
+    """Loader+version the live install links currently point at, if any."""
+
+    root = install_dir().resolve()
+    for name in _LAUNCH_LINKS:
+        dest = directory / name
+        if not dest.exists() and not dest.is_symlink():
+            continue
+        try:
+            resolved = dest.resolve()
+        except OSError:
+            continue
+        for parent in (resolved.parent, *resolved.parents):
+            try:
+                if parent.parent.resolve() != root:
+                    continue
+            except OSError:
+                continue
+            ref = parse_install_ref(parent)
+            if ref:
+                return ref
+    return None
+
+
 def install_tree_ready(loader: str, version: str) -> bool:
     install = install_tree(loader, version)
     if not install.is_dir():
@@ -637,14 +665,16 @@ def install_tree_ready(loader: str, version: str) -> bool:
 
 
 def prepare_game_command() -> list[str] | None:
-    """Link install + stage mods. Attempt uses HA pin + uploads; golden uses the proven snapshot."""
+    """Link install X + stage mods, or restore the last proven snapshot after a crash."""
 
     from golden_boot import (
         attempt_needs_player,
         choose_boot_mode,
         consume_attempt_request,
         extra_player_jars,
-        load_golden_meta,
+        load_boot_session,
+        load_golden_install,
+        should_restage,
         stage_golden_snapshot,
         write_boot_session,
     )
@@ -657,13 +687,12 @@ def prepare_game_command() -> list[str] | None:
     ha_version = minecraft_version()
     print(explain_minecraft_pin(), flush=True)
     mode = choose_boot_mode(directory, ha_version=ha_version, loader=loader)
-    meta = load_golden_meta(directory) if mode == "golden" else None
-    if mode == "golden" and meta is None:
+    golden_ref = load_golden_install(directory) if mode == "golden" else None
+    if mode == "golden" and golden_ref is None:
         mode = "attempt"
     if mode == "golden":
-        assert meta is not None
-        golden_loader = str(meta.get("loader") or loader)
-        golden_version = str(meta.get("minecraft_version") or ha_version)
+        assert golden_ref is not None
+        golden_loader, golden_version = golden_ref
         if not install_tree_ready(golden_loader, golden_version):
             print(
                 f"Golden install missing ({install_tree(golden_loader, golden_version)}); "
@@ -671,11 +700,10 @@ def prepare_game_command() -> list[str] | None:
                 file=sys.stderr,
             )
             mode = "attempt"
-            meta = None
+            golden_ref = None
     if mode == "golden":
-        assert meta is not None
-        loader = str(meta.get("loader") or loader)
-        version = str(meta.get("minecraft_version") or ha_version)
+        assert golden_ref is not None
+        loader, version = golden_ref
         print(
             f"Boot mode=golden requested={ha_version} launching={version} ({loader})",
             flush=True,
@@ -688,15 +716,11 @@ def prepare_game_command() -> list[str] | None:
             mode="golden",
             loader=loader,
             minecraft_version=version,
-            stock=bool(meta.get("stock")),
+            stock=not extra_player_jars(mods_snapshot_dir(directory)),
             proven=True,
         )
     else:
         version = ha_version
-        print(
-            f"Boot mode=attempt launching={version} ({loader})",
-            flush=True,
-        )
         if not install_tree_ready(loader, version):
             print(
                 f"Installing Minecraft {version} ({loader}) into {install_dir()}…",
@@ -714,25 +738,47 @@ def prepare_game_command() -> list[str] | None:
                 file=sys.stderr,
             )
             return None
-        consume_attempt_request(directory)
-        _link_install(directory, loader, version)
-        _ensure_rcon_properties(directory)
-        stage_mod_snapshot(directory)
-        snapshot = mods_snapshot_dir(directory)
-        write_boot_session(
-            directory,
-            mode="attempt",
-            loader=loader,
-            minecraft_version=version,
-            stock=not extra_player_jars(snapshot),
-            needs_player=attempt_needs_player(
+        if should_restage(directory, loader=loader, version=version):
+            print(
+                f"Boot mode=attempt launching={version} ({loader})",
+                flush=True,
+            )
+            consume_attempt_request(directory)
+            _link_install(directory, loader, version)
+            _ensure_rcon_properties(directory)
+            stage_mod_snapshot(directory)
+            snapshot = mods_snapshot_dir(directory)
+            write_boot_session(
                 directory,
-                ha_version=ha_version,
+                mode="attempt",
                 loader=loader,
-                snapshot=snapshot,
-            ),
-            proven=False,
-        )
+                minecraft_version=version,
+                stock=not extra_player_jars(snapshot),
+                needs_player=attempt_needs_player(
+                    directory,
+                    snapshot=snapshot,
+                ),
+                proven=False,
+            )
+        else:
+            print(
+                f"Boot launching current snapshot Minecraft {version} ({loader})",
+                flush=True,
+            )
+            _ensure_rcon_properties(directory)
+            ref = current_install(directory)
+            if ref:
+                loader, version = ref
+            if ref and load_golden_install(directory) == ref:
+                session = load_boot_session(directory)
+                write_boot_session(
+                    directory,
+                    mode="golden",
+                    loader=loader,
+                    minecraft_version=version,
+                    stock=bool(session.get("stock", True)),
+                    proven=True,
+                )
     install = install_tree(loader, version)
     java_opts = env_or_option("java_opts", "-Xms2G -Xmx4G")
     cmd = ["java", *java_opts.split()]

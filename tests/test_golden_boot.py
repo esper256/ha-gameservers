@@ -58,6 +58,16 @@ def _fake_neoforge(installs: Path, version: str) -> None:
 
 
 def _has_golden(world: Path) -> bool:
+    if not (world / "golden_mods").is_dir():
+        return False
+    link = world / "golden_install"
+    if link.exists() or link.is_symlink():
+        try:
+            name = link.resolve().name
+        except OSError:
+            name = ""
+        if "neoforge-" in name or "fabric-" in name:
+            return True
     meta = world / "golden.json"
     if not meta.is_file():
         return False
@@ -71,7 +81,7 @@ def _has_golden(world: Path) -> bool:
         return False
     if not str(data.get("loader") or "").strip():
         return False
-    return (world / "golden_mods").is_dir()
+    return True
 
 
 def _write_ha_pin(tmp: Path, version: str) -> Path:
@@ -168,7 +178,7 @@ class GoldenBootContractTests(unittest.TestCase):
                 json.loads((world / "golden.json").read_text(encoding="utf-8")).get("stock")
             )
 
-    def test_pin_change_ready_without_player_does_not_promote(self) -> None:
+    def test_pin_change_stock_ready_promotes_new_snapshot(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             world = self._env(Path(tmp))
             (world / "uploaded_mods").mkdir(parents=True)
@@ -177,12 +187,9 @@ class GoldenBootContractTests(unittest.TestCase):
             self.assertTrue(_has_golden(world))
             _write_ha_pin(Path(tmp), "1.21.11")
             haos_defaults.prepare_game_command()
+            self.assertEqual(haos_defaults.current_install(world), ("neoforge", "1.21.11"))
             self._probe(ready=True)
-            meta = json.loads((world / "golden.json").read_text(encoding="utf-8"))
-            self.assertEqual(meta["minecraft_version"], "1.21.1")
-            self._probe(ready=True, player_count=1)
-            meta = json.loads((world / "golden.json").read_text(encoding="utf-8"))
-            self.assertEqual(meta["minecraft_version"], "1.21.11")
+            self.assertTrue((world / "golden_install").resolve().name.endswith("1.21.11"))
 
     def test_unproven_crash_boots_golden_without_rewriting_uploads(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -338,10 +345,18 @@ class GoldenBootContractTests(unittest.TestCase):
             self.assertEqual(_boot_mode(world), "attempt")
             self.assertTrue((world / "server.jar").exists())
 
-    def test_choose_boot_mode_ignores_leftover_attempt_state(self) -> None:
+    def test_restage_uses_install_link_not_saved_pin_copies(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            world = Path(tmp)
+            root = Path(tmp)
+            world = root / "world"
+            world.mkdir()
+            installs = root / "installs"
+            os.environ["INSTALL_DIR"] = str(installs)
+            _fake_neoforge(installs, "1.21.1")
+            _fake_neoforge(installs, "1.21.11")
             (world / "golden_mods").mkdir()
+            (world / "mods").mkdir()
+            (world / "uploaded_mods").mkdir()
             (world / "golden.json").write_text(
                 json.dumps({"loader": "neoforge", "minecraft_version": "1.21.1"}),
                 encoding="utf-8",
@@ -355,27 +370,35 @@ class GoldenBootContractTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
+            haos_defaults._link_install(world, "neoforge", "1.21.1")
+            self.assertTrue(
+                golden_boot.should_restage(world, loader="neoforge", version="1.21.11")
+            )
+            self.assertFalse(
+                golden_boot.should_restage(world, loader="neoforge", version="1.21.1")
+            )
             self.assertEqual(
-                golden_boot.choose_boot_mode(
-                    world, ha_version="1.21.11", loader="neoforge"
-                ),
+                golden_boot.choose_boot_mode(world, ha_version="1.21.11", loader="neoforge"),
                 "attempt",
             )
-            self.assertEqual(
-                golden_boot.choose_boot_mode(
-                    world, ha_version="1.21.1", loader="neoforge"
-                ),
-                "golden",
-            )
 
-    def test_choose_boot_mode_crash_falls_back_then_retries_ha_pin(self) -> None:
+    def test_crash_falls_back_then_retries_when_install_link_is_old(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            world = Path(tmp)
+            root = Path(tmp)
+            world = root / "world"
+            world.mkdir()
+            installs = root / "installs"
+            os.environ["INSTALL_DIR"] = str(installs)
+            _fake_neoforge(installs, "1.21.1")
+            _fake_neoforge(installs, "1.21.11")
             (world / "golden_mods").mkdir()
+            (world / "mods").mkdir()
+            (world / "uploaded_mods").mkdir()
             (world / "golden.json").write_text(
                 json.dumps({"loader": "neoforge", "minecraft_version": "1.21.1"}),
                 encoding="utf-8",
             )
+            golden_boot.write_golden_install(world, loader="neoforge", version="1.21.1")
             golden_boot.write_boot_session(
                 world,
                 mode="attempt",
@@ -397,11 +420,15 @@ class GoldenBootContractTests(unittest.TestCase):
                 stock=True,
                 proven=True,
             )
+            haos_defaults._link_install(world, "neoforge", "1.21.1")
             self.assertEqual(
                 golden_boot.choose_boot_mode(
                     world, ha_version="1.21.11", loader="neoforge"
                 ),
                 "attempt",
+            )
+            self.assertTrue(
+                golden_boot.should_restage(world, loader="neoforge", version="1.21.11")
             )
 
     def test_minecraft_only_state_no_supervisor_golden_api(self) -> None:
