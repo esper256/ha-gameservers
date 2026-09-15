@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.14.1
+
+- Changing Minecraft version on Configuration starts a new server+mods snapshot even after the first launch. If that try fails, the last proven snapshot still starts; a later start tries the new pin again.
+- MOTD, slots, whitelist, and the container game port are applied on every start, not only the first world create.
+
 ## 3.14.0
 
 - OPEN WEB UI shows how many people are playing. Restarts wait until that live count is 0.

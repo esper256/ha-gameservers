@@ -624,6 +624,7 @@ class HaVersionPinTests(unittest.TestCase):
             "INSTALL_DIR",
             "MINECRAFT_VERSION",
             "JAVA_OPTS",
+            "OPTIONS_FILE",
         ):
             os.environ.pop(key, None)
 
@@ -668,6 +669,23 @@ class HaVersionPinTests(unittest.TestCase):
             self.assertTrue((Path(os.environ["INSTALL_DIR"]) / "neoforge-1.21.1").is_dir())
             self.assertTrue((Path(os.environ["INSTALL_DIR"]) / "neoforge-1.21.11").is_dir())
             self.assertEqual((world / "mods" / "cool_creepers.jar").read_bytes(), b"mod")
+
+    def test_prepare_world_reseeds_infra_when_pin_changes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            world = self._env(Path(tmp), "1.21.1")
+            uploaded = world / "uploaded_mods"
+            (uploaded / "automodpack.jar").write_bytes(b"old-seed")
+            os.chmod(uploaded / "automodpack.jar", 0o444)
+            os.environ["MINECRAFT_VERSION"] = "1.21.11"
+            with patch.object(haos_defaults, "_seed_infrastructure") as seed:
+                with patch.object(haos_defaults, "_link_install", return_value=None):
+                    self.assertEqual(haos_defaults.cmd_prepare_world(), 0)
+            profile = json.loads((world / "profile.json").read_text(encoding="utf-8"))
+            self.assertEqual(profile["minecraft_version"], "1.21.11")
+            self.assertFalse((uploaded / "automodpack.jar").exists())
+            seed.assert_called_once()
+            self.assertEqual(seed.call_args.args[1], "neoforge")
+            self.assertEqual(seed.call_args.args[2], "1.21.11")
 
     def test_unchanged_pin_keeps_loader(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

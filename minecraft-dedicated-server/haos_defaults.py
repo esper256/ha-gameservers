@@ -48,12 +48,19 @@ def options() -> dict[str, Any]:
 
 
 def env_or_option(key: str, default: str = "") -> str:
-    env_key = key.upper()
-    if os.environ.get(env_key):
-        return str(os.environ[env_key]).strip()
+    """HA ``options.json`` wins over a leftover process env value.
+
+    Home Assistant writes the live pin on each start. Docker/compose may still
+    export ``MINECRAFT_VERSION`` from the first launch; that must not freeze
+    the Configuration tab.
+    """
+
     opt = options()
     if key in opt and str(opt.get(key) or "").strip():
         return str(opt[key]).strip()
+    env_key = key.upper()
+    if os.environ.get(env_key):
+        return str(os.environ[env_key]).strip()
     return default
 
 
@@ -391,6 +398,10 @@ def cmd_prepare_world() -> int:
     if loader not in {"neoforge", "fabric"}:
         loader = "neoforge"
     version = minecraft_version()
+    pin_changed = (
+        str(profile.get("minecraft_version") or "").strip() != version
+        or str(profile.get("loader") or "").strip().lower() != loader
+    )
     write_json(
         directory / "profile.json",
         {
@@ -408,6 +419,8 @@ def cmd_prepare_world() -> int:
     )
     _write_server_properties(directory)
     _link_install(directory, loader, version)
+    if pin_changed:
+        _clear_seeded_infrastructure(directory)
     _seed_infrastructure(directory, loader, version)
     cmd_write_copyparty_banner()
     return 0
@@ -418,8 +431,8 @@ def _write_server_properties(directory: Path) -> None:
     slots = env_or_option("server_slots", "8")
     online = env_or_option("online_mode", "true").lower()
     whitelist = env_or_option("white_list", "true").lower()
-    port = os.environ.get("SERVER_PORT") or ""
-    rcon_port = os.environ.get("RCON_PORT") or ""
+    port = (os.environ.get("SERVER_PORT") or env_or_option("server_port") or "").strip()
+    rcon_port = (os.environ.get("RCON_PORT") or env_or_option("rcon_port") or "").strip()
     password = _ensure_rcon_password()
     lines = [
         f"motd={motd}",
@@ -501,6 +514,18 @@ def _seed_jar(url: str, dest: Path) -> None:
     _download(url, tmp)
     os.replace(tmp, dest)
     os.chmod(dest, SEALED_MODE)
+
+
+def _clear_seeded_infrastructure(directory: Path) -> None:
+    """Drop baked AutoModpack / Fabric API so a new pin can re-seed."""
+
+    uploaded = uploaded_mods_dir(directory)
+    if not uploaded.is_dir():
+        return
+    for path in uploaded.glob("automodpack*.jar"):
+        path.unlink(missing_ok=True)
+    for path in uploaded.glob("fabric-api*.jar"):
+        path.unlink(missing_ok=True)
 
 
 def _seed_infrastructure(directory: Path, loader: str, version: str) -> None:
@@ -603,7 +628,7 @@ def prepare_game_command() -> list[str] | None:
         loader = str(meta.get("loader") or loader)
         version = str(meta.get("minecraft_version") or ha_version)
         _link_install(directory, loader, version)
-        _ensure_rcon_properties(directory)
+        _ensure_runtime_properties(directory)
         stage_golden_snapshot(directory)
         write_boot_session(
             directory,
@@ -625,7 +650,7 @@ def prepare_game_command() -> list[str] | None:
         consume_attempt_request(directory)
         record_attempt_state(directory, ha_version=ha_version, loader=loader)
         _link_install(directory, loader, version)
-        _ensure_rcon_properties(directory)
+        _ensure_runtime_properties(directory)
         stage_mod_snapshot(directory)
         snapshot = mods_snapshot_dir(directory)
         write_boot_session(
@@ -758,6 +783,12 @@ def _ensure_rcon_password() -> str:
 
 
 def _ensure_rcon_properties(directory: Path) -> None:
+    _ensure_runtime_properties(directory)
+
+
+def _ensure_runtime_properties(directory: Path) -> None:
+    """Re-apply HA pin settings that must change after the first world create."""
+
     password = _ensure_rcon_password()
     props = read_server_properties(directory)
     updates = {
@@ -765,9 +796,25 @@ def _ensure_rcon_properties(directory: Path) -> None:
         "rcon.password": password,
         "broadcast-rcon-to-ops": "false",
         "enable-status": "true",
+        "motd": env_or_option("server_motd", "A Minecraft Server"),
+        "max-players": env_or_option("server_slots", "8"),
     }
-    if not str(props.get("rcon.port") or "").strip():
-        updates["rcon.port"] = (os.environ.get("RCON_PORT") or "").strip() or "25575"
+    online = env_or_option("online_mode", "true").lower()
+    updates["online-mode"] = (
+        "true" if online in {"1", "true", "yes", "on"} else "false"
+    )
+    whitelist = env_or_option("white_list", "true").lower()
+    updates["white-list"] = (
+        "true" if whitelist in {"1", "true", "yes", "on"} else "false"
+    )
+    port = (os.environ.get("SERVER_PORT") or env_or_option("server_port") or "").strip()
+    if port:
+        updates["server-port"] = port
+    rcon_port = (os.environ.get("RCON_PORT") or env_or_option("rcon_port") or "").strip()
+    if rcon_port:
+        updates["rcon.port"] = rcon_port
+    elif not str(props.get("rcon.port") or "").strip():
+        updates["rcon.port"] = "25575"
     upsert_server_properties(directory, updates)
 
 

@@ -98,6 +98,7 @@ class GoldenBootContractTests(unittest.TestCase):
             "JAVA_OPTS",
             "MOD_PUBLISHER_DIR",
             "SERVER_PORT",
+            "OPTIONS_FILE",
         ):
             os.environ.pop(key, None)
 
@@ -248,6 +249,54 @@ class GoldenBootContractTests(unittest.TestCase):
             haos_defaults.prepare_game_command()
             self.assertEqual(_boot_mode(world), "attempt")
             self.assertTrue((world / "server.jar").exists())
+
+    def test_ha_options_json_pin_beats_stale_env(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            world = self._env(Path(tmp))
+            (world / "uploaded_mods").mkdir(parents=True)
+            haos_defaults.prepare_game_command()
+            self._probe(ready=True)
+            haos_defaults.prepare_game_command()
+            self.assertEqual(_boot_mode(world), "golden")
+            options = Path(tmp) / "options.json"
+            options.write_text(
+                json.dumps({"minecraft_version": "1.21.11", "server_motd": "New pin"}),
+                encoding="utf-8",
+            )
+            os.environ["OPTIONS_FILE"] = str(options)
+            os.environ["MINECRAFT_VERSION"] = "1.21.1"
+            haos_defaults.prepare_game_command()
+            self.assertEqual(_boot_mode(world), "attempt")
+            session = json.loads((world / "boot.json").read_text(encoding="utf-8"))
+            self.assertEqual(session["minecraft_version"], "1.21.11")
+
+    def test_ha_pin_retries_after_unproven_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            world = self._env(Path(tmp))
+            (world / "uploaded_mods").mkdir(parents=True)
+            haos_defaults.prepare_game_command()
+            self._probe(ready=True)
+            self.assertTrue(_has_golden(world))
+            os.environ["MINECRAFT_VERSION"] = "1.21.11"
+            haos_defaults.prepare_game_command()
+            self.assertEqual(_boot_mode(world), "attempt")
+            haos_defaults.prepare_game_command()
+            self.assertEqual(_boot_mode(world), "golden")
+            haos_defaults.prepare_game_command()
+            self.assertEqual(_boot_mode(world), "attempt")
+            session = json.loads((world / "boot.json").read_text(encoding="utf-8"))
+            self.assertEqual(session["minecraft_version"], "1.21.11")
+
+    def test_runtime_properties_apply_port_after_first_launch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            world = self._env(Path(tmp))
+            (world / "uploaded_mods").mkdir(parents=True)
+            haos_defaults.prepare_game_command()
+            self._probe(ready=True)
+            os.environ["SERVER_PORT"] = "25566"
+            haos_defaults.prepare_game_command()
+            props = haos_defaults.read_server_properties(world)
+            self.assertEqual(props.get("server-port"), "25566")
 
     def test_publish_marks_attempt_request(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
