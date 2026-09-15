@@ -1,5 +1,9 @@
 # Changelog
 
+## 3.8.4
+
+- Copyparty publishes on idle `xiu` (not `xau`) so deleting the inbox JAR cannot desync up2k and make the browser re-upload in a loop.
+
 ## 3.8.3
 
 - Slim Copyparty: hide the top menu (media player, search, unpost), REPL, control panel, sidebar tree, zip/thumbnails/transcode. Login and `/mods` breadcrumbs stay.
