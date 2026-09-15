@@ -129,6 +129,31 @@ class PublishModTests(unittest.TestCase):
                 publish_mod.inspect_jar(dest)["mod_id"], "cool_creepers"
             )
 
+    def test_publish_from_stdin_skips_partial(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            worlds = root / "worlds" / "FamilyWorld"
+            worlds.mkdir(parents=True)
+            (worlds / "profile.json").write_text(
+                json.dumps({"loader": "neoforge"}), encoding="utf-8"
+            )
+            publisher = root / "publisher"
+            incoming = publisher / "incoming"
+            incoming.mkdir(parents=True)
+            os.environ["DATA_DIR"] = str(root / "worlds")
+            os.environ["STATE_DIR"] = str(root / "state")
+            os.environ["MOD_PUBLISHER_DIR"] = str(publisher)
+            Path(os.environ["STATE_DIR"]).mkdir(parents=True, exist_ok=True)
+            jar = incoming / "jade.jar"
+            partial = incoming / "jade.jar.PARTIAL"
+            _jar(jar, fabric=False, mod_id="jade")
+            _jar(partial, fabric=False, mod_id="jade")
+            self.assertEqual(publish_mod.publish_paths([partial, jar]), 0)
+            dest = worlds / "mods" / "jade.jar"
+            self.assertTrue(dest.is_file())
+            self.assertFalse(jar.exists())
+            self.assertTrue(partial.is_file())
+
     def test_rejects_wrong_loader(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -161,10 +186,11 @@ class PublishModTests(unittest.TestCase):
                 os.environ.pop("PUBLISHER_PASSWORD", None)
                 os.environ.pop("DATA_DIR", None)
             conf = (root / "copyparty.conf").read_text(encoding="utf-8")
-            self.assertIn("xau:", conf)
+            self.assertIn("xiu:", conf)
+            self.assertIn("i2,", conf)
+            self.assertNotIn("xau:", conf)
             self.assertIn("[/mods]", conf)
             self.assertIn("xbd:", conf)
-            self.assertIn("xau:", conf)
             self.assertIn("e2dsa", conf)
             self.assertIn("ui-nombar", conf)
             self.assertIn("no-thumb", conf)
@@ -174,6 +200,7 @@ class PublishModTests(unittest.TestCase):
             self.assertTrue((root / "incoming" / ".prologue.html").is_file())
             self.assertTrue((root / "installed").is_symlink())
             self.assertTrue((root / "on-delete-guard.sh").is_file())
+            self.assertIn("--stdin", (root / "on-upload.sh").read_text(encoding="utf-8"))
 
     def test_guard_delete_protects_automodpack(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

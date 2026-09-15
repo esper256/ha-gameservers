@@ -21,7 +21,7 @@ World switch/create, backups, restore, status. Home Assistant Ingress — no ext
 
 Open `http://<home-assistant-host>:8765/`, sign in with the publisher password. The page is a file drop, not a media site: the player, search, zip, and other Copyparty extras are turned off.
 
-The home page is an **inbox**. Drop a JAR to add or replace a mod (same mod id replaces the last build). The file is removed from this folder after it installs — that does not mean the mod is gone.
+The home page is an **inbox**. Drop a JAR to add or replace a mod (same mod id replaces the last build). After Copyparty finishes the upload handshake (~2s idle), the file is copied into `mods/` and removed from this folder — that does not mean the mod is gone. Use the **1.21.1** loader build (not 1.21.11).
 
 **Installed mods** (`/mods/`) is the live `mods/` folder for the current world. Delete a jar there to take it off the server (not AutoModpack / Fabric API). The game restarts; relaunch Minecraft if AutoModpack asks.
 

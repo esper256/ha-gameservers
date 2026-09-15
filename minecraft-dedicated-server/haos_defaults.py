@@ -433,7 +433,14 @@ def cmd_write_copyparty_config() -> int:
     installed = sync_active_mods_link()
     hook = root / "on-upload.sh"
     hook.write_text(
-        '#!/bin/sh\nexec python3 /opt/publish_mod.py "$1"\n',
+        "#!/bin/sh\n"
+        # xau (if used) passes the path as $1. xiu passes absolute paths on stdin
+        # after the up2k handshake so deleting the inbox file cannot retrigger
+        # the browser upload.
+        'if [ "$#" -ge 1 ]; then\n'
+        '  exec python3 /opt/publish_mod.py "$1"\n'
+        "fi\n"
+        "exec python3 /opt/publish_mod.py --stdin\n",
         encoding="utf-8",
     )
     hook.chmod(0o755)
@@ -499,7 +506,7 @@ font-family:sans-serif;line-height:1.45">
     rw: kids
   flags:
     e2dsa
-    xau: {hook}
+    xiu: i2,{hook}
 
 [/mods]
   {installed}

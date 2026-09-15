@@ -201,6 +201,55 @@ def _publish_locked(incoming: Path) -> int:
     return 0
 
 
+def _skip_inbox_path(path: Path) -> bool:
+    name = path.name
+    if name.startswith("."):
+        return True
+    lower = name.lower()
+    if lower.endswith(".partial"):
+        return True
+    if not lower.endswith(".jar"):
+        return True
+    return False
+
+
+def publish_paths(paths: list[Path]) -> int:
+    """Publish each inbox JAR; used by Copyparty xiu (paths on stdin)."""
+
+    rc = 0
+    for raw in paths:
+        path = Path(raw)
+        if _skip_inbox_path(path):
+            continue
+        if not path.is_file():
+            continue
+        result = publish(path)
+        if result not in (0,):
+            rc = result
+    return rc
+
+
+def publish_from_stdin() -> int:
+    text = sys.stdin.read()
+    stripped = text.strip()
+    if not stripped:
+        return 0
+    if stripped.startswith("["):
+        try:
+            payload = json.loads(stripped)
+        except json.JSONDecodeError:
+            payload = None
+        if isinstance(payload, list):
+            paths = [
+                Path(str(item.get("ap") or item.get("vp") or ""))
+                for item in payload
+                if isinstance(item, dict)
+            ]
+            return publish_paths([p for p in paths if str(p)])
+    paths = [Path(line.strip()) for line in text.splitlines() if line.strip()]
+    return publish_paths(paths)
+
+
 def rollback(mod_id: str) -> int:
     lock = _lock_file()
     try:
@@ -276,6 +325,11 @@ def guard_delete(path: Path) -> int:
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description="Publish a family Minecraft mod JAR")
     parser.add_argument("path", nargs="?", help="Uploaded JAR path")
+    parser.add_argument(
+        "--stdin",
+        action="store_true",
+        help="Read Copyparty xiu paths (one per line, or JSON list) from stdin",
+    )
     parser.add_argument("--rollback", metavar="MOD_ID", help="Restore last archived JAR")
     parser.add_argument(
         "--guard-delete",
@@ -294,6 +348,8 @@ def main(argv: list[str]) -> int:
         return after_delete(Path(args.after_delete))
     if args.rollback:
         return rollback(args.rollback)
+    if args.stdin:
+        return publish_from_stdin()
     if not args.path:
         parser.error("JAR path required")
     return publish(Path(args.path))
