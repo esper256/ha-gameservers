@@ -2221,11 +2221,14 @@ def _ui_view(
     debug_mode = bool(status.get("debug_mode"))
     # Without debug mode, hide the players card until an active pattern or
     # status_probe can populate it — otherwise the card is a permanent empty
-    # state that looks broken. Count mode needs a numeric source (log
-    # player_count or status_probe); join/leave-only games use last-joined.
+    # state that looks broken. A numeric card needs count mode plus a real
+    # headcount (log player_count or status_probe). Presence / join-leave-only
+    # games do not know how many people are on — never show a fake number.
     has_active_player_count = "player_count" in active_categories
-    has_probe_count = bool(status.get("status_probe")) and not presence_mode
-    has_numeric_count = has_active_player_count or has_probe_count
+    has_probe_count = bool(status.get("status_probe"))
+    has_numeric_count = (not presence_mode) and (
+        has_active_player_count or has_probe_count
+    )
     has_active_presence = bool(
         active_categories
         & {"player_join", "player_leave", "players_empty", "player_count"}
