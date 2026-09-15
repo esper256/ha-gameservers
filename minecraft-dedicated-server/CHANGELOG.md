@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.14.1
+
+- Minecraft version on Configuration is used even if the add-on was not fully restarted. A missing install for that version is downloaded before boot.
+- Player count is read from the Java status ping so the log is not filled with RCON connect/disconnect lines.
+
 ## 3.14.0
 
 - OPEN WEB UI shows how many people are playing. Restarts wait until that live count is 0.
