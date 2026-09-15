@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.13.0
+
+- A proven boot keeps the snapshot the server actually ran. A bad upload or pin that crashes before that boots the last proven snapshot without changing the upload folder.
+- Home Assistant can restart the add-on if even that snapshot will not start.
+
 ## 3.12.2
 
 - A proven boot (stock ready, or extra mods after a player joins) is kept as a fallback. A bad upload or pin that crashes before that boots the fallback without changing the upload folder.

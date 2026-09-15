@@ -70,7 +70,6 @@ ui_theme:
   wash: "#120e08"
   depth: "#0e0b07"
 player_tracking_mode: count
-hold_on_crash_loop: false
 restart_when_empty: true
 copyparty:
   port: 8765

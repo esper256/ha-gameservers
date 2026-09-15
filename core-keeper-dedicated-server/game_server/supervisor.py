@@ -1709,8 +1709,7 @@ class GameServerSupervisor:
                     "Restart limit reached; supervisor is leaving the server stopped.",
                     force=True,
                 )
-                if not self.plugin.hold_on_crash_loop:
-                    break
+                break
 
         self.monitor.stop()
         self.backups.stop()

@@ -61,7 +61,8 @@ class MinecraftPluginTests(unittest.TestCase):
         self.assertIsNotNone(plugin.world_create)
         self.assertEqual(plugin.world_create.fields[0].id, "mod_loader")
         self.assertEqual(plugin.ui_theme.get("accent"), "#5aad32")
-        self.assertFalse(plugin.hold_on_crash_loop)
+        self.assertFalse(hasattr(plugin, "hold_on_crash_loop"))
+        self.assertNotIn("hold_on_crash_loop", PLUGIN.read_text(encoding="utf-8"))
         import yaml
 
         cfg = yaml.safe_load(
@@ -334,10 +335,11 @@ class PublishModTests(unittest.TestCase):
             uploaded.joinpath("cool_creepers.jar").write_bytes(b"next-generation")
             os.chmod(uploaded / "cool_creepers.jar", 0o444)
             haos_defaults.stage_mod_snapshot(world)
-            prev = world / "mods.prev" / "cool_creepers.jar"
-            self.assertTrue(prev.is_file())
-            self.assertEqual(prev.read_bytes(), b"sealed-payload")
-            self.assertEqual(staged.read_bytes(), b"next-generation")
+            self.assertFalse((world / "mods.prev").exists())
+            self.assertFalse((world / "mods.release").exists())
+            self.assertEqual(
+                (world / "mods" / "cool_creepers.jar").read_bytes(), b"next-generation"
+            )
 
     def test_stage_skips_vanished_upload_jars(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -380,6 +382,11 @@ class PublishModTests(unittest.TestCase):
             self.assertFalse(nxt.exists())
             self.assertEqual((world / "mods" / "cool_creepers.jar").read_bytes(), b"fresh")
             self.assertFalse((world / "mods" / "stale.jar").exists())
+            leftover = world / "mods.prev"
+            leftover.mkdir()
+            (leftover / "old.jar").write_bytes(b"old")
+            haos_defaults.stage_mod_snapshot(world)
+            self.assertFalse(leftover.exists())
 
     def test_hardlink_stage_isolates_replaced_upload(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

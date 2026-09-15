@@ -132,9 +132,6 @@ class GamePlugin:
     # count (default) or presence — see PLAYER_TRACKING_* constants.
     # Presence: join → occupied; matching leave may keep others; unknown leave → idle.
     player_tracking_mode: str = PLAYER_TRACKING_COUNT
-    # Stay in the supervisor loop after the crash restart budget (Ingress and
-    # Copyparty keep running). Default off so HA watchdog can recycle others.
-    hold_on_crash_loop: bool = False
     # Delay a pending game restart until player count is 0 (or the process is
     # already down). World switch/create still restart immediately.
     restart_when_empty: bool = False
@@ -225,7 +222,6 @@ class GamePlugin:
             world_create=WorldCreateSpec.from_dict(data.get("world_create")),
             ui_theme=_coerce_ui_theme(data.get("ui_theme")),
             player_tracking_mode=tracking_mode,
-            hold_on_crash_loop=bool(data.get("hold_on_crash_loop", False)),
             restart_when_empty=bool(data.get("restart_when_empty", False)),
             copyparty=CopypartySpec.from_dict(data.get("copyparty")),
             status_probe=StatusProbeSpec.from_dict(data.get("status_probe")),

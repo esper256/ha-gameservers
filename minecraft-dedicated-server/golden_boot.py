@@ -1,8 +1,8 @@
 """Last-known-good boot: sealed mods + Minecraft version + loader.
 
-uploaded_mods/ is the next experiment (Copyparty). The JVM loads a snapshot.
-Stock ready promotes without a player; extra jars / pin / loader need a join.
-Restore boots golden_mods and leaves uploads alone. Minecraft-layer only.
+uploaded_mods/ is the next experiment (Copyparty). An attempt snapshots that
+folder into mods/ once; that tree is immutable for the JVM. Golden preserves
+that snapshot and releases the previous golden. Minecraft-layer only.
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ from typing import Any, Literal
 
 from haos_defaults import (
     PROTECTED_MOD_IDS,
-    clone_sealed_jar,
+    install_snapshot,
     mods_snapshot_dir,
     sealed_jars,
     uploaded_mods_dir,
@@ -99,10 +99,17 @@ def load_attempt_state(directory: Path) -> dict[str, Any]:
     return _read_json(directory / ATTEMPT_STATE)
 
 
-def attempt_needs_player(directory: Path, *, ha_version: str, loader: str) -> bool:
+def attempt_needs_player(
+    directory: Path,
+    *,
+    ha_version: str,
+    loader: str,
+    snapshot: Path | None = None,
+) -> bool:
     """True when this combo is not the stock first configuration."""
 
-    if extra_player_jars(uploaded_mods_dir(directory)):
+    folder = snapshot if snapshot is not None else uploaded_mods_dir(directory)
+    if extra_player_jars(folder):
         return True
     meta = load_golden_meta(directory)
     if meta is None:
@@ -207,16 +214,7 @@ def _promote(directory: Path, session: dict[str, Any]) -> None:
     loader = str(session.get("loader") or "neoforge")
     version = str(session.get("minecraft_version") or "")
     dest = directory / GOLDEN_DIR
-    if dest.exists():
-        shutil.rmtree(dest, ignore_errors=True)
-    dest.mkdir(parents=True)
-    for jar in sealed_jars(uploaded_mods_dir(directory)):
-        try:
-            clone_sealed_jar(jar, dest / jar.name)
-        except FileNotFoundError:
-            continue
-        except OSError:
-            continue
+    install_snapshot(mods_snapshot_dir(directory), dest)
     write_json(
         directory / GOLDEN_META,
         {
@@ -232,33 +230,10 @@ def _promote(directory: Path, session: dict[str, Any]) -> None:
 def stage_golden_snapshot(directory: Path) -> None:
     """Rebuild world/mods from the golden sealed set (leave uploaded_mods)."""
 
-    import errno
-    import os
-
-    from haos_defaults import MODS_NEXT, MODS_PREV
-
-    golden = directory / GOLDEN_DIR
-    mods = mods_snapshot_dir(directory)
-    nxt = directory / MODS_NEXT
-    prev = directory / MODS_PREV
-    if nxt.exists():
-        shutil.rmtree(nxt, ignore_errors=True)
-    nxt.mkdir(parents=True)
-    if golden.is_dir():
-        for jar in sealed_jars(golden):
-            try:
-                clone_sealed_jar(jar, nxt / jar.name)
-            except FileNotFoundError:
-                continue
-            except OSError as exc:
-                if exc.errno == errno.ENOENT:
-                    continue
-                raise
-    if prev.exists():
-        shutil.rmtree(prev, ignore_errors=True)
-    if mods.exists():
-        os.replace(mods, prev)
-    os.replace(nxt, mods)
+    leftover_prev = directory / "mods.prev"
+    if leftover_prev.exists():
+        shutil.rmtree(leftover_prev, ignore_errors=True)
+    install_snapshot(directory / GOLDEN_DIR, mods_snapshot_dir(directory))
 
 
 def apply_probe_findings(directory: Path, findings: dict[str, Any]) -> None:

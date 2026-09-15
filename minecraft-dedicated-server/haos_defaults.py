@@ -34,8 +34,6 @@ PROTECTED_MOD_IDS = frozenset(
 SEALED_MODE = 0o444
 UPLOADED_MODS = "uploaded_mods"
 MODS_SNAPSHOT = "mods"
-MODS_NEXT = "mods.next"
-MODS_PREV = "mods.prev"
 
 
 def options() -> dict[str, Any]:
@@ -185,6 +183,45 @@ def clone_sealed_jar(src: Path, dest: Path) -> None:
         pass
 
 
+def swap_snapshot(nxt: Path, dest: Path) -> None:
+    """Install nxt as dest; release the previous dest tree."""
+
+    stale = dest.with_name(dest.name + ".release")
+    if stale.exists():
+        shutil.rmtree(stale, ignore_errors=True)
+    if dest.exists():
+        os.replace(dest, stale)
+    os.replace(nxt, dest)
+    shutil.rmtree(stale, ignore_errors=True)
+
+
+def fill_snapshot(src_folder: Path, nxt: Path) -> None:
+    """Clone sealed jars from src_folder into a fresh nxt directory."""
+
+    if nxt.exists():
+        shutil.rmtree(nxt, ignore_errors=True)
+    nxt.mkdir(parents=True)
+    if not src_folder.is_dir():
+        return
+    for jar in sealed_jars(src_folder):
+        try:
+            clone_sealed_jar(jar, nxt / jar.name)
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            if exc.errno == errno.ENOENT:
+                continue
+            raise
+
+
+def install_snapshot(src_folder: Path, dest: Path) -> None:
+    """Atomically replace dest with a clone of src_folder; release the old dest."""
+
+    nxt = dest.with_name(dest.name + ".next")
+    fill_snapshot(src_folder, nxt)
+    swap_snapshot(nxt, dest)
+
+
 def migrate_legacy_mods(directory: Path) -> None:
     """Move jars from a pre-snapshot mods/ tree into uploaded_mods/ once."""
 
@@ -211,31 +248,15 @@ def migrate_legacy_mods(directory: Path) -> None:
 
 
 def stage_mod_snapshot(directory: Path | None = None) -> None:
-    """Rebuild world/mods (reflink, else hardlink, else copy); keep mods.prev."""
+    """Snapshot uploaded_mods into mods/ once; release any previous current tree."""
 
     directory = directory or profile_dir()
+    leftover_prev = directory / "mods.prev"
+    if leftover_prev.exists():
+        shutil.rmtree(leftover_prev, ignore_errors=True)
     uploaded = uploaded_mods_dir(directory)
-    mods = mods_snapshot_dir(directory)
-    nxt = directory / MODS_NEXT
-    prev = directory / MODS_PREV
     uploaded.mkdir(parents=True, exist_ok=True)
-    if nxt.exists():
-        shutil.rmtree(nxt, ignore_errors=True)
-    nxt.mkdir(parents=True)
-    for jar in sealed_jars(uploaded):
-        try:
-            clone_sealed_jar(jar, nxt / jar.name)
-        except FileNotFoundError:
-            continue
-        except OSError as exc:
-            if exc.errno == errno.ENOENT:
-                continue
-            raise
-    if prev.exists():
-        shutil.rmtree(prev, ignore_errors=True)
-    if mods.exists():
-        os.replace(mods, prev)
-    os.replace(nxt, mods)
+    install_snapshot(uploaded, mods_snapshot_dir(directory))
 
 
 def read_profile(directory: Path) -> dict[str, Any]:
@@ -548,7 +569,7 @@ def prepare_game_command() -> list[str] | None:
         attempt_needs_player,
         choose_boot_mode,
         consume_attempt_request,
-        is_stock_uploads,
+        extra_player_jars,
         load_golden_meta,
         record_attempt_state,
         stage_golden_snapshot,
@@ -567,14 +588,20 @@ def prepare_game_command() -> list[str] | None:
         mode = "attempt"
     if mode == "golden":
         assert meta is not None
-        loader = str(meta.get("loader") or loader)
-        version = str(meta.get("minecraft_version") or ha_version)
-        if not install_tree_ready(loader, version):
+        golden_loader = str(meta.get("loader") or loader)
+        golden_version = str(meta.get("minecraft_version") or ha_version)
+        if not install_tree_ready(golden_loader, golden_version):
             print(
-                f"Golden install missing: {install_tree(loader, version)}",
+                f"Golden install missing ({install_tree(golden_loader, golden_version)}); "
+                f"attempting Minecraft {ha_version} ({loader})",
                 file=sys.stderr,
             )
-            return None
+            mode = "attempt"
+            meta = None
+    if mode == "golden":
+        assert meta is not None
+        loader = str(meta.get("loader") or loader)
+        version = str(meta.get("minecraft_version") or ha_version)
         _link_install(directory, loader, version)
         _ensure_rcon_properties(directory)
         stage_golden_snapshot(directory)
@@ -600,14 +627,18 @@ def prepare_game_command() -> list[str] | None:
         _link_install(directory, loader, version)
         _ensure_rcon_properties(directory)
         stage_mod_snapshot(directory)
+        snapshot = mods_snapshot_dir(directory)
         write_boot_session(
             directory,
             mode="attempt",
             loader=loader,
             minecraft_version=version,
-            stock=is_stock_uploads(directory),
+            stock=not extra_player_jars(snapshot),
             needs_player=attempt_needs_player(
-                directory, ha_version=ha_version, loader=loader
+                directory,
+                ha_version=ha_version,
+                loader=loader,
+                snapshot=snapshot,
             ),
             proven=False,
         )

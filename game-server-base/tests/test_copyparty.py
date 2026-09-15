@@ -176,7 +176,6 @@ class CopypartyPublisherTests(unittest.TestCase):
     def test_example_plugin_has_no_copyparty(self) -> None:
         plugin = load_plugin(FIXTURE)
         self.assertIsNone(plugin.copyparty)
-        self.assertFalse(plugin.hold_on_crash_loop)
         self.assertFalse(plugin.restart_when_empty)
         self.assertIsNone(plugin.status_probe)
 
