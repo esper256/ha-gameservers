@@ -19,10 +19,10 @@ services:
     environment:
       GAME_PLUGIN: /opt/games/game.yaml
       INSTALL_DIR: /data/game
-      WORLD_NAME: FamilyFactory
+      WORLD_NAME: World
       # Leave SERVER_NAME unset/blank for a stable "HAOS Factorio ####" default.
       # SERVER_NAME: My Factory
-      SERVER_DESCRIPTION: Welcome to the family Factorio server!
+      SERVER_DESCRIPTION: Welcome to the server!
       SERVER_PASSWORD: changeme
       SERVER_SLOTS: "10"
       AUTO_PAUSE: "true"

@@ -17,9 +17,9 @@ services:
       INSTALL_DIR: /data/installs
       DATA_DIR: /data/worlds
       STATE_DIR: /data/supervisor
-      WORLD_NAME: FamilyWorld
+      WORLD_NAME: World
       MINECRAFT_VERSION: "1.21.1"
-      SERVER_MOTD: Family Minecraft
+      SERVER_MOTD: A Minecraft Server
       SERVER_SLOTS: "8"
       ONLINE_MODE: "true"
       WHITE_LIST: "true"

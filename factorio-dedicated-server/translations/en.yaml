@@ -1,7 +1,7 @@
 configuration:
   world_name:
     name: Save name
-    description: Factorio save file name without .zip (e.g. FamilyFactory). Created under /data/world/saves/ on first start or after NEW WORLD.
+    description: Factorio save file name without .zip (e.g. World). Created under /data/world/saves/ on first start or after NEW WORLD.
   server_name:
     name: Server name
     description: "Optional name shown in the Factorio server browser / LAN list. Leave blank to use a stable generated name like HAOS Factorio 4821 (same digits for this install; different across installs)."

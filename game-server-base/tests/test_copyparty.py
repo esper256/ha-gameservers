@@ -84,7 +84,7 @@ class CopypartyPublisherTests(unittest.TestCase):
             self.assertIn("e2dsa", text)
             self.assertIn("dotpart", text)
             self.assertIn("ui-nombar", text)
-            self.assertIn("kids: secret", text)
+            self.assertIn("mods: secret", text)
             self.assertFalse(leftover.exists())
             self.assertFalse(empty.exists())
             upload = (root / "state" / "copyparty" / "on-upload.sh").read_text(

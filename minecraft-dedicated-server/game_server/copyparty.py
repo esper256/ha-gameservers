@@ -167,10 +167,10 @@ class CopypartyPublisher:
         key = self._spec.password_option
         env_key = key.upper()
         if os.environ.get(env_key):
-            return str(os.environ[env_key]).strip() or "family"
+            return str(os.environ[env_key]).strip() or "upload"
         raw = self._options.get(key)
         text = str(raw or "").strip()
-        return text or "family"
+        return text or "upload"
 
     def _write_hook(self, name: str, argv: list[str], *, idle: bool) -> Path | None:
         if not argv:
@@ -236,13 +236,13 @@ class CopypartyPublisher:
   ui-norepl
 
 [accounts]
-  kids: {self._password()}
+  mods: {self._password()}
 
 [/]
   {root}
   accs:
-    rw: kids
-    d: kids
+    rw: mods
+    d: mods
   flags:
 {flag_block}
 """,

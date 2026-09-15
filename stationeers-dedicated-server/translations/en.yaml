@@ -1,7 +1,7 @@
 configuration:
   world_name:
     name: Save name
-    description: Stationeers save folder name (no spaces; e.g. FamilyStation). Created under /data/world/saves/ on first start.
+    description: Stationeers save folder name (no spaces; e.g. World). Created under /data/world/saves/ on first start.
   world_type:
     name: World / map
     description: "Map used when the save does not exist yet. Default Mars2 (Mars). Common values: Mars2, Lunar, Europa3, MimasHerschel, Vulcan, Venus. Legacy maps (moon, mars, …) also work on older branches."

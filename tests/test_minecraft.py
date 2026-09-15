@@ -111,7 +111,7 @@ class PublishModTests(unittest.TestCase):
     def test_inspect_and_replace_by_mod_id(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            worlds = root / "worlds" / "FamilyWorld"
+            worlds = root / "worlds" / "World"
             worlds.mkdir(parents=True)
             (worlds / "profile.json").write_text(
                 json.dumps({"loader": "fabric", "minecraft_version": "1.21.1"}),
@@ -143,7 +143,7 @@ class PublishModTests(unittest.TestCase):
     def test_publish_from_stdin_skips_partial(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            worlds = root / "worlds" / "FamilyWorld"
+            worlds = root / "worlds" / "World"
             worlds.mkdir(parents=True)
             (worlds / "profile.json").write_text(
                 json.dumps({"loader": "neoforge"}), encoding="utf-8"
@@ -168,7 +168,7 @@ class PublishModTests(unittest.TestCase):
     def test_rejects_wrong_loader(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            worlds = root / "worlds" / "FamilyWorld"
+            worlds = root / "worlds" / "World"
             worlds.mkdir(parents=True)
             (worlds / "profile.json").write_text(
                 json.dumps({"loader": "neoforge"}), encoding="utf-8"
@@ -188,7 +188,7 @@ class PublishModTests(unittest.TestCase):
     def test_rejects_wrong_minecraft_version(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            worlds = root / "worlds" / "FamilyWorld"
+            worlds = root / "worlds" / "World"
             worlds.mkdir(parents=True)
             (worlds / "profile.json").write_text(
                 json.dumps({"loader": "neoforge", "minecraft_version": "1.21.1"}),
@@ -223,14 +223,14 @@ class PublishModTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             data = root / "worlds"
-            (data / "FamilyWorld" / "uploaded_mods").mkdir(parents=True)
+            (data / "World" / "uploaded_mods").mkdir(parents=True)
             os.environ["DATA_DIR"] = str(data)
             publisher = CopypartyPublisher(
                 plugin.copyparty,
                 state_dir=str(root / "state"),
                 data_dir=str(data),
-                options={"publisher_password": "secret", "world_name": "FamilyWorld"},
-                world_name="FamilyWorld",
+                options={"publisher_password": "secret", "world_name": "World"},
+                world_name="World",
             )
             conf = publisher._write_config().read_text(encoding="utf-8")
             self.assertIn("xiu:", conf)
@@ -255,7 +255,7 @@ class PublishModTests(unittest.TestCase):
     def test_copyparty_banner_on_upload_folder(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            worlds = root / "worlds" / "FamilyWorld"
+            worlds = root / "worlds" / "World"
             worlds.mkdir(parents=True)
             os.environ["DATA_DIR"] = str(root / "worlds")
             os.environ["STATE_DIR"] = str(root / "state")
@@ -272,18 +272,18 @@ class PublishModTests(unittest.TestCase):
     def test_guard_delete_protects_automodpack(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            uploaded = root / "worlds" / "FamilyWorld" / "uploaded_mods"
+            uploaded = root / "worlds" / "World" / "uploaded_mods"
             uploaded.mkdir(parents=True)
             protected = uploaded / "automodpack.jar"
             _jar(protected, fabric=False, mod_id="automodpack")
-            kid = uploaded / "cool_creepers.jar"
-            _jar(kid, fabric=True)
+            jar = uploaded / "cool_creepers.jar"
+            _jar(jar, fabric=True)
             os.environ["DATA_DIR"] = str(root / "worlds")
             os.environ["STATE_DIR"] = str(root / "state")
             Path(os.environ["STATE_DIR"]).mkdir(exist_ok=True)
             self.assertEqual(publish_mod.guard_delete(protected), 2)
-            self.assertEqual(publish_mod.guard_delete(kid), 0)
-            self.assertEqual(publish_mod.guard_upload(kid), 2)
+            self.assertEqual(publish_mod.guard_delete(jar), 0)
+            self.assertEqual(publish_mod.guard_upload(jar), 2)
             fresh = uploaded / "cool-creepers-2.jar"
             self.assertEqual(publish_mod.guard_upload(fresh), 0)
 
@@ -306,7 +306,7 @@ class PublishModTests(unittest.TestCase):
 
     def test_stage_snapshot_survives_unlink(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            world = Path(tmp) / "FamilyWorld"
+            world = Path(tmp) / "World"
             uploaded = world / "uploaded_mods"
             uploaded.mkdir(parents=True)
             src = uploaded / "cool_creepers.jar"
@@ -341,7 +341,7 @@ class LaunchLinkTests(unittest.TestCase):
             (install / "user_jvm_args.txt").write_text("-Xmx1G\n", encoding="utf-8")
             (install / "server.jar").write_bytes(b"starter")
             (install / ".install.env").write_text("SERVER=run.sh\n", encoding="utf-8")
-            world = root / "worlds" / "FamilyWorld"
+            world = root / "worlds" / "World"
             world.mkdir(parents=True)
             os.environ["INSTALL_DIR"] = str(root / "installs")
             haos_defaults._link_install(world, "neoforge", "1.21.1")

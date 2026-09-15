@@ -3,7 +3,7 @@
 ## Configure and start
 
 1. On **Configuration**, set at least:
-   - **World name** (default `FamilyWorld`)
+   - **World name** (default `World`)
    - **Server password** (recommended)
 2. **Start** the app. First Steam download can take several minutes — watch **Logs**.
 3. Forward **UDP 14159** on your router to this Home Assistant host (change the Network port in HA only if 14159 is already taken).

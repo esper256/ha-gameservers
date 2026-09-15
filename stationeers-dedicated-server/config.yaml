@@ -1,6 +1,6 @@
 name: "Stationeers Dedicated Server"
 description: "Stationeers dedicated multiplayer server with SteamCMD auto-updates, player-aware restarts, generational world backups, and an Ingress status/log toolkit."
-version: "3.10.0"
+version: "3.10.1"
 slug: "stationeers_dedicated_server"
 url: "https://github.com/esper256/ha-gameservers/tree/main/stationeers-dedicated-server"
 # SteamCMD / Stationeers dedicated server binaries are x86_64. HAOS on aarch64 will not offer this app.
@@ -28,7 +28,7 @@ ports_description:
   27016/udp: Game port players use on this Home Assistant machine (UDP). Leave at 27016 unless that port is already taken.
   27015/udp: Steam query / update port (UDP). Leave at 27015 unless that port is already taken.
 options:
-  world_name: "FamilyStation"
+  world_name: "World"
   world_type: "Mars2"
   server_name: ""
   server_password: ""

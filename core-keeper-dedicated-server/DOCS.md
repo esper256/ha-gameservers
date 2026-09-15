@@ -3,7 +3,7 @@
 ## Configure and start
 
 1. On **Configuration**, set at least:
-   - **World name** (default `FamilyCore`)
+   - **World name** (default `World`)
    - Leave **Game ID** and **Join password** blank unless you want to pin specific codes
    - Optional **Admin Steam IDs** (SteamID64 list) if you do not want first-join to decide who is admin
    - Leave **World slot** at `0` unless you already keep several caverns

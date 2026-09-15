@@ -6,8 +6,7 @@ never leaks into ``game-server-base``.
 Join is **both** at once, not XOR. Official ``ARGUMENTS.txt``: ``-port``
 makes the server accept Direct Connect (IP); omit ``-port`` and it is Steam
 Datagram Relay only. ``-gameid`` is independent. This app always passes
-``-port``, so LAN IP, forwarded WAN IP, and Game ID work together — mixed
-household-on-LAN + remote-Steam-on-Game-ID is the intended default.
+``-port``, so LAN IP, forwarded WAN IP, and Game ID work together.
 
 An empty or invalid ``-gameid`` makes the dedicated server mint a new ID on
 start, which would change the join code and strand players. An omitted
@@ -389,7 +388,7 @@ def ensure_admins(
         print(
             "Admins: none pinned; first player to join a new world becomes "
             "admin (in-game ESC player-list star). Set admin_steam_ids to "
-            "pin household SteamID64 values."
+            "pin SteamID64 values."
         )
         return None
 

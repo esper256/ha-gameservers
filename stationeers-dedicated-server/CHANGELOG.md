@@ -1,5 +1,9 @@
 # Changelog
 
+## 3.10.1
+
+- Default save name is generic.
+
 ## 3.10.0
 
 - No player-facing changes for this game.

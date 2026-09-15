@@ -1,4 +1,4 @@
-"""Validate and activate a kid-uploaded Minecraft mod JAR."""
+"""Validate and activate an uploaded Minecraft mod JAR."""
 
 from __future__ import annotations
 
@@ -322,7 +322,7 @@ def _rollback_locked(mod_id: str) -> int:
 
 
 def after_delete(path: Path) -> int:
-    """Restart after a kid deletes an installed JAR (file is already gone)."""
+    """Restart after an uploaded JAR is deleted (file is already gone)."""
 
     if path.suffix.lower() != ".jar":
         return 0
@@ -396,7 +396,7 @@ def guard_upload(path: Path) -> int:
 
 
 def main(argv: list[str]) -> int:
-    parser = argparse.ArgumentParser(description="Publish a family Minecraft mod JAR")
+    parser = argparse.ArgumentParser(description="Publish a Minecraft mod JAR")
     parser.add_argument("path", nargs="?", help="Uploaded JAR path")
     parser.add_argument(
         "--stdin",

@@ -60,7 +60,7 @@ Restoring stops the server, makes a world backup, then restores onto the active 
 
 ## Joining (Direct Connect **and** Game ID)
 
-Official `ARGUMENTS.txt`: passing `-port` **adds** Direct Connect (the server accepts IP joins and cross-play). Omitting `-port` makes it Steam Datagram Relay only, with no IP join. Game ID (`-gameid`) is independent. This app always passes `-port`, so **both methods are on at once**. Mixed play is the point: household on the LAN via IP, remote Steam friends via Game ID.
+Official `ARGUMENTS.txt`: passing `-port` **adds** Direct Connect (the server accepts IP joins and cross-play). Omitting `-port` makes it Steam Datagram Relay only, with no IP join. Game ID (`-gameid`) is independent. This app always passes `-port`, so **both methods are on at once**. LAN players can use IP; remote Steam players can use Game ID.
 
 | How they join | Who | Port-forward UDP 7778? | Password? |
 | --- | --- | --- | --- |

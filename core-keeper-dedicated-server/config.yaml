@@ -1,6 +1,6 @@
 name: "Core Keeper Dedicated Server"
 description: "Core Keeper dedicated multiplayer server with SteamCMD auto-updates, player-aware restarts, generational world backups, and an Ingress status/log toolkit."
-version: "3.10.0"
+version: "3.10.1"
 slug: "core_keeper_dedicated_server"
 url: "https://github.com/esper256/ha-gameservers/tree/main/core-keeper-dedicated-server"
 # SteamCMD / Core Keeper dedicated server binaries are x86_64. HAOS on aarch64 will not offer this app.
@@ -29,7 +29,7 @@ ports_description:
 # Direct Connect (-port) and Game ID (SDR) are both on. Mixed LAN IP +
 # remote Game ID is supported. There is no public server-browser listing.
 options:
-  world_name: "FamilyCore"
+  world_name: "World"
   world_index: 0
   world_seed: ""
   world_mode: 0

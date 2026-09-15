@@ -1,6 +1,6 @@
 name: "Hytale Dedicated Server"
 description: "Hytale dedicated multiplayer server (official Linux downloader, Java 25) with auto-updates, world backups, and an Ingress status UI. First start needs two Hytale account sign-ins (download, then server)."
-version: "3.10.0"
+version: "3.10.1"
 slug: "hytale_dedicated_server"
 url: "https://github.com/esper256/ha-gameservers/tree/main/hytale-dedicated-server"
 arch:
@@ -28,7 +28,7 @@ ports_description:
 options:
   world_name: "default"
   server_name: ""
-  server_motd: "Welcome to the family Hytale server!"
+  server_motd: "Welcome to the server!"
   server_password: ""
   server_slots: 20
   java_opts: "-Xms2G -Xmx4G"
