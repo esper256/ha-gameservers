@@ -39,7 +39,9 @@ Each world is a profile (save + mods + Fabric or NeoForge). Kids publish JARs on
 
 ## Publishing a mod
 
-Build a normal Fabric or NeoForge JAR (must match the world). Drag it onto the upload page. Wait for the server to come back, then relaunch Minecraft if AutoModpack asks.
+Build a normal Fabric or NeoForge JAR (must match the world). Open the upload page, sign in, drop the JAR onto the inbox. It leaves that folder after install. Wait for the server to come back, then relaunch Minecraft if AutoModpack asks.
+
+To remove a mod, open **Installed mods** on that same site and delete the jar (leave AutoModpack).
 
 ---
 

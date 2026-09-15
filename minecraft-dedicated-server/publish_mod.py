@@ -237,11 +237,61 @@ def _rollback_locked(mod_id: str) -> int:
     return 0
 
 
+def after_delete(path: Path) -> int:
+    """Restart after a kid deletes an installed JAR (file is already gone)."""
+
+    if path.suffix.lower() != ".jar":
+        return 0
+    _request_restart()
+    print(f"Removed {path.name}; restart in {DEBOUNCE_SECONDS}s")
+    return 0
+
+
+def guard_delete(path: Path) -> int:
+    """Block deletes of protected mods; Copyparty xbd ``c`` treats nonzero as deny."""
+
+    mods = (profile_dir() / "mods").resolve()
+    try:
+        resolved = path.resolve()
+        resolved.relative_to(mods)
+    except (OSError, ValueError):
+        print("Refusing delete outside the active mods folder", file=sys.stderr)
+        return 2
+    if resolved.suffix.lower() != ".jar":
+        print("Only JAR deletes are allowed here", file=sys.stderr)
+        return 2
+    mod_id = resolved.stem
+    if resolved.is_file():
+        try:
+            info = inspect_jar(resolved)
+            mod_id = str(info.get("mod_id") or mod_id)
+        except (ValueError, zipfile.BadZipFile, OSError):
+            pass
+    if mod_id in PROTECTED_MOD_IDS or resolved.stem in PROTECTED_MOD_IDS:
+        print(f"Refusing to delete protected mod {mod_id}", file=sys.stderr)
+        return 2
+    return 0
+
+
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description="Publish a family Minecraft mod JAR")
     parser.add_argument("path", nargs="?", help="Uploaded JAR path")
     parser.add_argument("--rollback", metavar="MOD_ID", help="Restore last archived JAR")
+    parser.add_argument(
+        "--guard-delete",
+        metavar="PATH",
+        help="Copyparty before-delete check (protected mods)",
+    )
+    parser.add_argument(
+        "--after-delete",
+        metavar="PATH",
+        help="Copyparty after-delete restart request",
+    )
     args = parser.parse_args(argv[1:])
+    if args.guard_delete:
+        return guard_delete(Path(args.guard_delete))
+    if args.after_delete:
+        return after_delete(Path(args.after_delete))
     if args.rollback:
         return rollback(args.rollback)
     if not args.path:
