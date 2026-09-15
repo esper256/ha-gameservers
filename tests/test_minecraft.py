@@ -57,6 +57,14 @@ class MinecraftPluginTests(unittest.TestCase):
         self.assertIsNotNone(plugin.world_create)
         self.assertEqual(plugin.world_create.fields[0].id, "mod_loader")
         self.assertEqual(plugin.ui_theme.get("accent"), "#5aad32")
+        self.assertTrue(plugin.hold_on_crash_loop)
+        self.assertTrue(plugin.restart_when_empty)
+        assert plugin.copyparty is not None
+        self.assertEqual(plugin.copyparty.port, 8765)
+        self.assertEqual(plugin.copyparty.root, "{data_dir}/{world_name}/mods")
+        self.assertIn("--guard-upload", plugin.copyparty.before_upload)
+        assert plugin.status_probe is not None
+        self.assertIn("status-probe", plugin.status_probe.argv)
 
     def test_config_version_matches_supervisor(self) -> None:
         import yaml
@@ -86,7 +94,7 @@ class MinecraftPluginTests(unittest.TestCase):
             except (OSError, UnicodeDecodeError):
                 continue
             lower = text.lower()
-            for word in ("minecraft", "neoforge", "automodpack", "copyparty"):
+            for word in ("minecraft", "neoforge", "automodpack"):
                 if word in lower:
                     hits.append(f"{path.relative_to(ROOT)}:{word}")
         self.assertEqual(hits, [], f"Minecraft leaked into game-server-base: {hits}")
@@ -205,32 +213,56 @@ class PublishModTests(unittest.TestCase):
             self.assertFalse((worlds / "mods" / "jade.jar").exists())
 
     def test_copyparty_config_uses_upload_hook(self) -> None:
+        from game_server.copyparty import CopypartyPublisher
+        from game_server.plugin import load_plugin
+
+        plugin = load_plugin(PLUGIN)
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            os.environ["MOD_PUBLISHER_DIR"] = str(root)
-            os.environ["DATA_DIR"] = str(root / "worlds")
-            os.environ["PUBLISHER_PASSWORD"] = "secret"
-            try:
-                self.assertEqual(haos_defaults.cmd_write_copyparty_config(), 0)
-            finally:
-                os.environ.pop("PUBLISHER_PASSWORD", None)
-                os.environ.pop("DATA_DIR", None)
-            conf = (root / "copyparty.conf").read_text(encoding="utf-8")
+            data = root / "worlds"
+            (data / "FamilyWorld" / "mods").mkdir(parents=True)
+            os.environ["DATA_DIR"] = str(data)
+            publisher = CopypartyPublisher(
+                plugin.copyparty,
+                state_dir=str(root / "state"),
+                data_dir=str(data),
+                options={"publisher_password": "secret", "world_name": "FamilyWorld"},
+                world_name="FamilyWorld",
+            )
+            conf = publisher._write_config().read_text(encoding="utf-8")
             self.assertIn("xiu:", conf)
             self.assertIn("i2,", conf)
             self.assertNotIn("xau:", conf)
-            self.assertIn("[/mods]", conf)
+            self.assertIn("[/]", conf)
+            self.assertNotIn("[/mods]", conf)
             self.assertIn("xbd:", conf)
+            self.assertIn("xbu:", conf)
             self.assertIn("e2dsa", conf)
+            self.assertIn("dotpart", conf)
             self.assertIn("ui-nombar", conf)
             self.assertIn("no-thumb", conf)
             self.assertIn("unpost: 0", conf)
             self.assertNotIn("ui-noacci", conf)
             self.assertNotIn("ui-nonav", conf)
-            self.assertTrue((root / "incoming" / ".prologue.html").is_file())
-            self.assertTrue((root / "installed").is_symlink())
-            self.assertTrue((root / "on-delete-guard.sh").is_file())
-            self.assertIn("--stdin", (root / "on-upload.sh").read_text(encoding="utf-8"))
+            hook = (root / "state" / "copyparty" / "on-upload.sh").read_text(
+                encoding="utf-8"
+            )
+            self.assertIn("publish_mod.py", hook)
+
+    def test_copyparty_banner_on_live_mods(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            worlds = root / "worlds" / "FamilyWorld"
+            worlds.mkdir(parents=True)
+            os.environ["DATA_DIR"] = str(root / "worlds")
+            os.environ["STATE_DIR"] = str(root / "state")
+            Path(os.environ["STATE_DIR"]).mkdir(exist_ok=True)
+            try:
+                self.assertEqual(haos_defaults.cmd_write_copyparty_banner(), 0)
+                self.assertTrue((worlds / "mods" / ".prologue.html").is_file())
+            finally:
+                os.environ.pop("DATA_DIR", None)
+                os.environ.pop("STATE_DIR", None)
 
     def test_guard_delete_protects_automodpack(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -287,6 +319,36 @@ class LaunchLinkTests(unittest.TestCase):
             self.assertFalse((world / "fabric-server-launch.jar").exists())
             found = haos_defaults.fabric_launcher_jar(install, world)
             self.assertEqual(found, world / jar_name)
+
+
+class StatusProbeTests(unittest.TestCase):
+    def test_list_response_and_status_json_omit(self) -> None:
+        self.assertEqual(
+            haos_defaults.parse_java_list_response(
+                "There are 2 of a max of 8 players online: Ada, Bob"
+            ),
+            2,
+        )
+        self.assertEqual(
+            haos_defaults.parse_java_list_response(
+                "There are 0 of a max of 8 players online:"
+            ),
+            0,
+        )
+        self.assertIsNone(haos_defaults.parse_java_list_response(""))
+        missing = haos_defaults.findings_from_status_json(
+            {"version": {"name": "1.21.1"}, "players": {"max": 8}}
+        )
+        self.assertEqual(missing.get("ready"), True)
+        self.assertEqual(missing.get("game_version"), "1.21.1")
+        self.assertNotIn("player_count", missing)
+        zero = haos_defaults.findings_from_status_json({"players": {"online": 0}})
+        self.assertEqual(zero.get("player_count"), 0)
+        self.assertEqual(
+            haos_defaults._bind_port({"server-port": "25566"}, "server-port", "SERVER_PORT"),
+            25566,
+        )
+        self.assertIsNone(haos_defaults._bind_port({}, "server-port", "MISSING_PORT"))
 
 
 if __name__ == "__main__":

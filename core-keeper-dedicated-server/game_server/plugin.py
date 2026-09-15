@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Mapping
 
+from .copyparty import CopypartySpec
 from .launch_prepare import ConfigFileSpec, WorldPrepareSpec
 from .package_install import PackageInstallSpec
 from .world_catalog import WorldCatalogSpec, WorldCreateSpec
@@ -23,6 +24,28 @@ _OPTION_TEMPLATE_RE = re.compile(r"\{([a-zA-Z_][a-zA-Z0-9_]*)\}")
 PLAYER_TRACKING_COUNT = "count"
 PLAYER_TRACKING_PRESENCE = "presence"
 PLAYER_TRACKING_MODES = frozenset({PLAYER_TRACKING_COUNT, PLAYER_TRACKING_PRESENCE})
+
+
+@dataclass
+class StatusProbeSpec:
+    """Optional argv that prints a JSON object of live game status fields."""
+
+    argv: list[str]
+    interval_seconds: float = 10.0
+
+    @classmethod
+    def from_dict(cls, data: Any) -> StatusProbeSpec | None:
+        if not data:
+            return None
+        if not isinstance(data, dict):
+            raise ValueError("status_probe must be an object")
+        argv = [str(x) for x in (data.get("argv") or []) if str(x).strip()]
+        if not argv:
+            raise ValueError("status_probe requires argv")
+        interval = float(data.get("interval_seconds") or 10)
+        if interval < 1:
+            interval = 1.0
+        return cls(argv=argv, interval_seconds=interval)
 
 
 @dataclass
@@ -109,6 +132,14 @@ class GamePlugin:
     # count (default) or presence — see PLAYER_TRACKING_* constants.
     # Presence: join → occupied; matching leave may keep others; unknown leave → idle.
     player_tracking_mode: str = PLAYER_TRACKING_COUNT
+    # Stay in the supervisor loop after the crash restart budget (Ingress and
+    # Copyparty keep running). Default off so HA watchdog can recycle others.
+    hold_on_crash_loop: bool = False
+    # Delay a pending game restart until player count is 0 (or the process is
+    # already down). World switch/create still restart immediately.
+    restart_when_empty: bool = False
+    copyparty: CopypartySpec | None = None
+    status_probe: StatusProbeSpec | None = None
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "GamePlugin":
@@ -194,6 +225,10 @@ class GamePlugin:
             world_create=WorldCreateSpec.from_dict(data.get("world_create")),
             ui_theme=_coerce_ui_theme(data.get("ui_theme")),
             player_tracking_mode=tracking_mode,
+            hold_on_crash_loop=bool(data.get("hold_on_crash_loop", False)),
+            restart_when_empty=bool(data.get("restart_when_empty", False)),
+            copyparty=CopypartySpec.from_dict(data.get("copyparty")),
+            status_probe=StatusProbeSpec.from_dict(data.get("status_probe")),
         )
 
     @property
@@ -285,6 +320,13 @@ class GamePlugin:
                     keys.add(str(option).strip().upper())
         if self.world_prepare is not None:
             for token in self.world_prepare.argv:
+                keys.update(_template_option_env_keys(token))
+        if self.copyparty is not None:
+            keys.update(_template_option_env_keys(self.copyparty.root))
+            if self.copyparty.password_option:
+                keys.add(self.copyparty.password_option.upper())
+        if self.status_probe is not None:
+            for token in self.status_probe.argv:
                 keys.update(_template_option_env_keys(token))
         # ProcessManager only injects java_opts when argv[0] is java.
         if self.executable and str(self.executable[0]).strip() == "java":

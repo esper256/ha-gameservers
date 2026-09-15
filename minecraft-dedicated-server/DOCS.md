@@ -10,7 +10,7 @@ Accept the Minecraft EULA (the **EULA** option, default on). Mojang requires thi
 2. Leave **Update interval** at **0** so Minecraft itself stays pinned. Changing the version option later is an intentional upgrade.
 3. **Start**. First boot downloads Fabric and NeoForge for that pin (needs outbound HTTPS).
 4. **Open Web UI** → **Worlds** → create extra worlds and pick the loader there (NeoForge default).
-5. Forward **TCP 25565** for play. Forward **TCP 8765** only on the LAN for uploads (do not put it on the public internet).
+5. On **Network**, map the Minecraft Java port to whatever host port you want (default 25565). Keep the upload port (8765) on the LAN only (do not put it on the public internet).
 6. On each kid PC: Prism instance with the same Minecraft version, matching loader, and AutoModpack. Join once, trust the server fingerprint, let mods sync, relaunch.
 
 ## OPEN WEB UI
@@ -21,9 +21,9 @@ World switch/create, backups, restore, status. Home Assistant Ingress — no ext
 
 Open `http://<home-assistant-host>:8765/`, sign in with the publisher password. The page is a file drop, not a media site: the player, search, zip, and other Copyparty extras are turned off.
 
-The home page is an **inbox**. Drop a JAR to add or replace a mod (same mod id replaces the last build). After Copyparty finishes the upload handshake (~2s idle), the file is copied into `mods/` and removed from this folder — that does not mean the mod is gone. The jar must match this world’s **Minecraft version** and **loader** (1.21.1 NeoForge here, not 1.21.11). Do not upload NeoForge/Fabric installer jars; those are the world type, not a mod.
+This site **is** the live `mods/` folder for the current world (not an inbox plus a `/mods/` view). Drop a JAR to add or replace a mod (same mod id replaces the last build even if the filename is different). The jar must match this world’s **Minecraft version** and **loader** (1.21.1 NeoForge here, not 1.21.11). Do not upload NeoForge/Fabric installer jars; those are the world type, not a mod.
 
-**Installed mods** (`/mods/`) is the live `mods/` folder for the current world. Delete a jar there to take it off the server (not AutoModpack / Fabric API). The game restarts; relaunch Minecraft if AutoModpack asks. If a bad jar already crashed the game, delete it here. The upload page stays up even when Minecraft will not start (Home Assistant must not stop the app).
+Delete a jar on the same page to take it off the server (not AutoModpack / Fabric API). If nobody is connected, the game restarts after a short pause so several jars can land together. If anyone is playing, it waits until the last player leaves, then restarts. Relaunch Minecraft if AutoModpack asks. If a bad jar already crashed the game, delete it here. The upload page stays up even when Minecraft will not start (this add-on has no Home Assistant watchdog).
 
 Do not upload AutoModpack or Fabric API — those are protected.
 
@@ -37,8 +37,8 @@ Do not upload AutoModpack or Fabric API — those are protected.
 | EULA | Must stay true |
 | Online mode / whitelist | Recommended on |
 | Java options | Heap; 4 GB host RAM is a practical floor |
-| Network TCP 25565 | Players |
-| Network TCP 8765 | Upload page |
+| Network (Minecraft Java) | Host port you mapped for the game (add-on Network settings) |
+| Network (upload page) | Default 8765, LAN only |
 
 ## Backups
 

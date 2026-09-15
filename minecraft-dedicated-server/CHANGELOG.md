@@ -2,8 +2,8 @@
 
 ## 3.9.0
 
-- Shared supervisor **3.9**: after a crash loop the supervisor stays up (`/healthz` stays healthy while lifecycle is `failed`) so Ingress and sidecars remain usable; start the game again from the UI or a restart request. Vendored `game_server/` sync.
-- Copyparty runs in a SIGHUP-proof loop so a Minecraft crash cannot take down the jar inbox; delete the breaking mod from `/mods/` then restart.
+- Shared supervisor **3.9**: optional Copyparty file-drop (`copyparty.port` + `copyparty.root`), optional `status_probe` JSON (peer to log regexes; omitted keys do not overwrite), optional `restart_when_empty` (wait unless occupancy is a known 0), optional `hold_on_crash_loop`. `/healthz` is **not** healthy while lifecycle is `failed`. Vendored `game_server/` sync.
+- Minecraft: Copyparty is the live `mods/` folder. Empty-server JAR drops restart after debounce; occupied servers wait for the last player to leave (`status_probe` via RCON `list`, then status ping on the process bind ports). Crash-loop hold, no add-on watchdog.
 
 ## 3.8.5
 

@@ -1,4 +1,4 @@
-"""Minecraft add-on helpers: loader install, world profiles, Copyparty config.
+"""Minecraft add-on helpers: loader install, world profiles, Copyparty banner.
 
 Kept out of game-server-base so Fabric/NeoForge names stay in this folder.
 """
@@ -69,27 +69,6 @@ def worlds_dir() -> Path:
 
 def publisher_root() -> Path:
     return Path(os.environ.get("MOD_PUBLISHER_DIR") or "/data/mod-publisher")
-
-
-def sync_active_mods_link() -> Path:
-    """Point Copyparty /mods at the live world's mods folder."""
-
-    target = profile_dir() / "mods"
-    target.mkdir(parents=True, exist_ok=True)
-    root = publisher_root()
-    root.mkdir(parents=True, exist_ok=True)
-    link = root / "installed"
-    if link.is_symlink():
-        try:
-            if link.resolve() == target.resolve():
-                return link
-        except OSError:
-            pass
-        link.unlink()
-    elif link.exists():
-        return link
-    link.symlink_to(target)
-    return link
 
 
 def state_dir() -> Path:
@@ -262,7 +241,7 @@ def cmd_prepare_world() -> int:
     _write_server_properties(directory)
     _link_install(directory, loader, version)
     _seed_infrastructure(directory, loader, version)
-    sync_active_mods_link()
+    cmd_write_copyparty_banner()
     return 0
 
 
@@ -271,18 +250,28 @@ def _write_server_properties(directory: Path) -> None:
     slots = env_or_option("server_slots", "8")
     online = env_or_option("online_mode", "true").lower()
     whitelist = env_or_option("white_list", "true").lower()
-    port = os.environ.get("SERVER_PORT") or "25565"
+    port = os.environ.get("SERVER_PORT") or ""
+    rcon_port = os.environ.get("RCON_PORT") or ""
+    password = _ensure_rcon_password()
     lines = [
         f"motd={motd}",
         f"max-players={slots}",
         f"online-mode={'true' if online in {'1', 'true', 'yes', 'on'} else 'false'}",
         f"white-list={'true' if whitelist in {'1', 'true', 'yes', 'on'} else 'false'}",
-        f"server-port={port}",
         "server-ip=0.0.0.0",
         "level-name=world",
         "enable-status=true",
         "sync-chunk-writes=true",
+        "enable-rcon=true",
+        f"rcon.password={password}",
+        "broadcast-rcon-to-ops=false",
     ]
+    if port.strip():
+        lines.append(f"server-port={port.strip()}")
+    if rcon_port.strip():
+        lines.append(f"rcon.port={rcon_port.strip()}")
+    else:
+        lines.append("rcon.port=25575")
     (directory / "server.properties").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
@@ -389,7 +378,7 @@ def cmd_run() -> int:
     version = str(profile.get("minecraft_version") or minecraft_version())
     install = install_dir() / f"{loader}-{version}"
     _link_install(directory, loader, version)
-    sync_active_mods_link()
+    _ensure_rcon_properties(directory)
     java_opts = env_or_option("java_opts", "-Xms2G -Xmx4G")
     os.chdir(directory)
     cmd = ["java", *java_opts.split()]
@@ -412,6 +401,300 @@ def cmd_run() -> int:
     return 1
 
 
+def _pack_varint(value: int) -> bytes:
+    out = bytearray()
+    n = int(value)
+    while True:
+        byte = n & 0x7F
+        n >>= 7
+        if n:
+            out.append(byte | 0x80)
+        else:
+            out.append(byte)
+            break
+    return bytes(out)
+
+
+def _pack_mc_str(text: str) -> bytes:
+    raw = text.encode("utf-8")
+    return _pack_varint(len(raw)) + raw
+
+
+def _read_varint(sock) -> int:
+    shift = 0
+    result = 0
+    while True:
+        chunk = sock.recv(1)
+        if not chunk:
+            raise OSError("short varint")
+        byte = chunk[0]
+        result |= (byte & 0x7F) << shift
+        if not byte & 0x80:
+            return result
+        shift += 7
+        if shift > 35:
+            raise OSError("varint too long")
+
+
+def read_server_properties(directory: Path) -> dict[str, str]:
+    path = directory / "server.properties"
+    out: dict[str, str] = {}
+    if not path.is_file():
+        return out
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return out
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        key, _, value = stripped.partition("=")
+        out[key.strip()] = value.strip()
+    return out
+
+
+def upsert_server_properties(directory: Path, updates: dict[str, str]) -> None:
+    path = directory / "server.properties"
+    current = read_server_properties(directory)
+    current.update({k: v for k, v in updates.items() if v != ""})
+    lines = [f"{key}={value}" for key, value in current.items()]
+    directory.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _rcon_password_path() -> Path:
+    return state_dir() / "rcon.password"
+
+
+def _ensure_rcon_password() -> str:
+    path = _rcon_password_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.is_file():
+        text = path.read_text(encoding="utf-8").strip()
+        if text:
+            return text
+    import secrets
+
+    password = secrets.token_urlsafe(18)
+    path.write_text(password + "\n", encoding="utf-8")
+    try:
+        path.chmod(0o600)
+    except OSError:
+        pass
+    return password
+
+
+def _ensure_rcon_properties(directory: Path) -> None:
+    password = _ensure_rcon_password()
+    props = read_server_properties(directory)
+    updates = {
+        "enable-rcon": "true",
+        "rcon.password": password,
+        "broadcast-rcon-to-ops": "false",
+        "enable-status": "true",
+    }
+    if not str(props.get("rcon.port") or "").strip():
+        updates["rcon.port"] = (os.environ.get("RCON_PORT") or "").strip() or "25575"
+    upsert_server_properties(directory, updates)
+
+
+def _bind_port(props: dict[str, str], key: str, env_key: str) -> int | None:
+    raw = str(props.get(key) or os.environ.get(env_key) or "").strip()
+    if not raw:
+        return None
+    try:
+        port = int(raw)
+    except ValueError:
+        return None
+    if port < 1 or port > 65535:
+        return None
+    return port
+
+
+def parse_java_list_response(text: str) -> int | None:
+    """Player count from RCON ``list``. Names after a colon; empty after colon is 0."""
+
+    blob = (text or "").strip()
+    if not blob:
+        return None
+    if ":" not in blob:
+        return None
+    after = blob.rsplit(":", 1)[-1].strip()
+    if not after:
+        return 0
+    names = [part.strip() for part in after.split(",") if part.strip()]
+    return len(names)
+
+
+def _rcon_recv_exact(sock, size: int) -> bytes:
+    buf = b""
+    while len(buf) < size:
+        chunk = sock.recv(size - len(buf))
+        if not chunk:
+            raise OSError("short rcon read")
+        buf += chunk
+    return buf
+
+
+def rcon_command(host: str, port: int, password: str, command: str) -> str | None:
+    import socket
+    import struct
+
+    def pack(req_id: int, kind: int, body: str) -> bytes:
+        payload = body.encode("utf-8") + b"\x00\x00"
+        data = struct.pack("<ii", req_id, kind) + payload
+        return struct.pack("<i", len(data)) + data
+
+    def read_packet(sock: socket.socket) -> tuple[int, str]:
+        header = _rcon_recv_exact(sock, 4)
+        length = struct.unpack("<i", header)[0]
+        if length < 10 or length > 4096:
+            raise OSError("bad rcon length")
+        body = _rcon_recv_exact(sock, length)
+        req_id, _kind = struct.unpack("<ii", body[:8])
+        payload = body[8:]
+        if payload.endswith(b"\x00\x00"):
+            payload = payload[:-2]
+        return req_id, payload.decode("utf-8", errors="replace")
+
+    sock = socket.create_connection((host, port), timeout=2.0)
+    try:
+        sock.sendall(pack(1, 3, password))
+        req_id, _ = read_packet(sock)
+        if req_id == -1:
+            return None
+        sock.sendall(pack(2, 2, command))
+        req_id, text = read_packet(sock)
+        if req_id == -1:
+            return None
+        return text
+    finally:
+        sock.close()
+
+
+def minecraft_status_payload(host: str, port: int) -> dict[str, Any]:
+    """Java status ping. Only keys the packet actually contained."""
+
+    import socket
+    import struct
+
+    out: dict[str, Any] = {}
+    sock = socket.create_connection((host, port), timeout=2.0)
+    try:
+        host_bytes = _pack_mc_str(host)
+        handshake = (
+            b"\x00"
+            + _pack_varint(0)
+            + host_bytes
+            + struct.pack(">H", int(port))
+            + _pack_varint(1)
+        )
+        sock.sendall(_pack_varint(len(handshake)) + handshake)
+        sock.sendall(_pack_varint(1) + b"\x00")
+        length = _read_varint(sock)
+        payload = b""
+        while len(payload) < length:
+            chunk = sock.recv(length - len(payload))
+            if not chunk:
+                break
+            payload += chunk
+        if not payload or payload[0] != 0:
+            return out
+        rest = payload[1:]
+        n = 0
+        shift = 0
+        idx = 0
+        while idx < len(rest):
+            byte = rest[idx]
+            n |= (byte & 0x7F) << shift
+            idx += 1
+            if not byte & 0x80:
+                break
+            shift += 7
+        raw = rest[idx : idx + n]
+        data = json.loads(raw.decode("utf-8"))
+        return findings_from_status_json(data)
+    finally:
+        sock.close()
+
+
+def findings_from_status_json(data: Any) -> dict[str, Any]:
+    """Map a decoded status ping object to asserted probe keys only."""
+
+    out: dict[str, Any] = {}
+    if not isinstance(data, dict):
+        return out
+    out["ready"] = True
+    version = data.get("version")
+    if isinstance(version, dict):
+        name = str(version.get("name") or "").strip()
+        if name:
+            out["game_version"] = name
+    players = data.get("players")
+    if isinstance(players, dict) and "online" in players and players["online"] is not None:
+        try:
+            if isinstance(players["online"], bool):
+                raise ValueError("bool")
+            out["player_count"] = int(players["online"])
+        except (TypeError, ValueError):
+            pass
+    return out
+
+
+def cmd_status_probe() -> int:
+    """Supervisor status_probe argv: JSON object, omitted keys mean no yield."""
+
+    directory = profile_dir()
+    _ensure_rcon_properties(directory)
+    props = read_server_properties(directory)
+    findings: dict[str, Any] = {}
+    password = str(props.get("rcon.password") or "").strip() or _ensure_rcon_password()
+    rcon_port = _bind_port(props, "rcon.port", "RCON_PORT")
+    if str(props.get("enable-rcon") or "").lower() in {"true", "1", "yes", "on"} and rcon_port:
+        import struct
+
+        try:
+            listed = rcon_command("127.0.0.1", rcon_port, password, "list")
+        except (OSError, struct.error):
+            listed = None
+        count = parse_java_list_response(listed or "")
+        if count is not None:
+            findings["player_count"] = count
+    game_port = _bind_port(props, "server-port", "SERVER_PORT")
+    if game_port is not None:
+        try:
+            status = minecraft_status_payload("127.0.0.1", game_port)
+        except (OSError, json.JSONDecodeError, UnicodeDecodeError, ValueError):
+            status = {}
+        if "ready" in status:
+            findings["ready"] = True
+        if "game_version" in status and "game_version" not in findings:
+            findings["game_version"] = status["game_version"]
+        if "player_count" not in findings and "player_count" in status:
+            findings["player_count"] = status["player_count"]
+    print(json.dumps(findings, separators=(",", ":")), flush=True)
+    return 0
+
+
+def _sweep_drop_junk(folder: Path) -> None:
+    if not folder.is_dir():
+        return
+    for path in folder.iterdir():
+        if not path.is_file():
+            continue
+        name = path.name
+        if name.endswith(".PARTIAL") or name.endswith(".partial"):
+            path.unlink(missing_ok=True)
+            continue
+        try:
+            empty_jar = path.suffix.lower() == ".jar" and path.stat().st_size == 0
+        except OSError:
+            continue
+        if empty_jar:
+            path.unlink(missing_ok=True)
+
+
 def fabric_launcher_jar(install: Path, directory: Path) -> Path | None:
     entry = helper_server_entry(install)
     if entry is None:
@@ -424,99 +707,28 @@ def fabric_launcher_jar(install: Path, directory: Path) -> Path | None:
     return None
 
 
-def cmd_write_copyparty_config() -> int:
-    password = env_or_option("publisher_password", "family")
-    port = env_or_option("publisher_port", os.environ.get("PUBLISHER_PORT") or "8765")
-    root = publisher_root()
-    incoming = root / "incoming"
-    incoming.mkdir(parents=True, exist_ok=True)
-    installed = sync_active_mods_link()
-    hook = root / "on-upload.sh"
-    hook.write_text(
-        "#!/bin/sh\n"
-        # xau (if used) passes the path as $1. xiu passes absolute paths on stdin
-        # after the up2k handshake so deleting the inbox file cannot retrigger
-        # the browser upload.
-        'if [ "$#" -ge 1 ]; then\n'
-        '  exec python3 /opt/publish_mod.py "$1"\n'
-        "fi\n"
-        "exec python3 /opt/publish_mod.py --stdin\n",
-        encoding="utf-8",
-    )
-    hook.chmod(0o755)
-    guard = root / "on-delete-guard.sh"
-    guard.write_text(
-        '#!/bin/sh\nexec python3 /opt/publish_mod.py --guard-delete "$1"\n',
-        encoding="utf-8",
-    )
-    guard.chmod(0o755)
-    after_del = root / "on-delete.sh"
-    after_del.write_text(
-        '#!/bin/sh\nexec python3 /opt/publish_mod.py --after-delete "$1"\n',
-        encoding="utf-8",
-    )
-    after_del.chmod(0o755)
-    # Dotfile: kids have no "dots" permission, so they cannot delete the banner.
-    (incoming / ".prologue.html").write_text(
+def cmd_write_copyparty_banner() -> int:
+    """Kid-facing HTML on the live mods folder (Copyparty has no dots perm)."""
+
+    mods = profile_dir() / "mods"
+    mods.mkdir(parents=True, exist_ok=True)
+    _sweep_drop_junk(mods)
+    (mods / ".prologue.html").write_text(
         """\
 <div style="max-width:42rem;margin:1rem 0 1.25rem;padding:1rem 1.15rem;\
 background:#241c12;color:#f2e6c9;border-left:4px solid #5aad32;\
 font-family:sans-serif;line-height:1.45">
   <strong>Family Minecraft mods</strong>
-  <p style="margin:0.6rem 0 0">You are in the right place. Drop a
-  <code>.jar</code> here to <em>add or replace</em> a mod. The same mod id
-  replaces the last build even if the filename is different. After it
-  installs, the file leaves this folder (it is an inbox, not the mod list).</p>
-  <p style="margin:0.6rem 0 0">To take a mod off the server, open
-  <a href="/mods/">Installed mods</a> and delete its jar (not AutoModpack).
-  The server restarts after a change. Then relaunch Minecraft if AutoModpack
-  asks.</p>
+  <p style="margin:0.6rem 0 0">This folder <em>is</em> the live mod list.
+  Drop a <code>.jar</code> here to add or replace a mod (same mod id
+  replaces the last build even if the filename is different). Delete a
+  jar to take it off (not AutoModpack). Use a build for this world&rsquo;s
+  Minecraft version and loader (1.21.1 NeoForge unless you created a
+  Fabric world).</p>
+  <p style="margin:0.6rem 0 0">If anyone is playing, the server waits
+  until the last player leaves, then restarts. Then relaunch Minecraft
+  if AutoModpack asks.</p>
 </div>
-""",
-        encoding="utf-8",
-    )
-    (root / "copyparty.conf").write_text(
-        f"""\
-[global]
-  p: {port}
-  e2dsa
-  no-crt
-  hist: {root / "cphist"}
-  name: Family Minecraft mods
-  doctitle: Family Minecraft mods
-  no-thumb
-  no-acode
-  no-zip
-  no-lifetime
-  unpost: 0
-  unp-who: 0
-  ui-nombar
-  ui-nosrvi
-  ui-notree
-  ui-nolbar
-  ui-noctxb
-  ui-norepl
-
-[accounts]
-  kids: {password}
-
-[/]
-  {incoming}
-  accs:
-    rw: kids
-  flags:
-    e2dsa
-    xiu: i2,{hook}
-
-[/mods]
-  {installed}
-  accs:
-    r: kids
-    d: kids
-  flags:
-    e2dsa
-    xbd: c,{guard}
-    xad: {after_del}
 """,
         encoding="utf-8",
     )
@@ -530,12 +742,15 @@ def main(argv: list[str]) -> int:
         "install": cmd_install,
         "prepare-world": cmd_prepare_world,
         "run": cmd_run,
-        "write-copyparty-config": cmd_write_copyparty_config,
+        "write-copyparty-banner": cmd_write_copyparty_banner,
+        "write-copyparty-config": cmd_write_copyparty_banner,
+        "status-probe": cmd_status_probe,
+        "player-count": cmd_status_probe,
     }
     if cmd not in handlers:
         print(
             "Usage: haos_defaults.py print-version|install|prepare-world|run|"
-            "write-copyparty-config",
+            "write-copyparty-banner|status-probe",
             file=sys.stderr,
         )
         return 2

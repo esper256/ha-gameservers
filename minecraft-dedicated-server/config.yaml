@@ -74,5 +74,4 @@ schema:
 backup_exclude:
   - "installs/**"
   - "**/libraries/**"
-watchdog: http://[HOST]:[PORT:8099]/healthz
 timeout: 300

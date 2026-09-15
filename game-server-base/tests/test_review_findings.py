@@ -270,11 +270,32 @@ class CrashRecoveryDuringDeferredUpdateTests(unittest.TestCase):
             self.assertGreaterEqual(supervisor.process.start_count, 2)
             self.assertLess(wait_calls, 40, f"busy-looped: {wait_calls} waits")
 
-    def test_crash_loop_keeps_supervisor_alive_for_operator_restart(self) -> None:
+    def test_crash_loop_exits_supervisor_by_default(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             supervisor = _supervisor(root)
             supervisor.config.restart_on_crash = False
+            script = root / "game" / "die.py"
+            script.write_text("raise SystemExit(1)\n", encoding="utf-8")
+            supervisor.plugin.executable = [sys.executable, str(script)]
+            supervisor.ensure_installed = lambda: None  # type: ignore[method-assign]
+
+            def runner() -> None:
+                with patch("signal.signal"):
+                    supervisor.run()
+
+            thread = threading.Thread(target=runner, name="supervisor-run", daemon=True)
+            thread.start()
+            thread.join(timeout=8)
+            self.assertFalse(thread.is_alive())
+            self.assertFalse(supervisor.health()["ok"])
+
+    def test_hold_on_crash_loop_keeps_supervisor_for_operator_restart(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            supervisor = _supervisor(root)
+            supervisor.config.restart_on_crash = False
+            supervisor.plugin.hold_on_crash_loop = True
             script = root / "game" / "die.py"
             script.write_text("raise SystemExit(1)\n", encoding="utf-8")
             supervisor.plugin.executable = [sys.executable, str(script)]
@@ -292,7 +313,7 @@ class CrashRecoveryDuringDeferredUpdateTests(unittest.TestCase):
             time.sleep(0.4)
             self.assertTrue(thread.is_alive(), "supervisor exited after the game crashed")
             self.assertEqual(supervisor.lifecycle(), "failed")
-            self.assertTrue(supervisor.health()["ok"])
+            self.assertFalse(supervisor.health()["ok"])
             supervisor.request_restart(reason="operator")
             deadline = time.time() + 5
             while time.time() < deadline and supervisor.process.start_count < 2:

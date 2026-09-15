@@ -70,7 +70,43 @@ ui_theme:
   wash: "#120e08"
   depth: "#0e0b07"
 player_tracking_mode: count
-log_patterns: {}
+hold_on_crash_loop: true
+restart_when_empty: true
+copyparty:
+  port: 8765
+  root: "{data_dir}/{world_name}/mods"
+  password_option: publisher_password
+  before_upload:
+    - python3
+    - /opt/publish_mod.py
+    - --guard-upload
+  after_idle_upload:
+    - python3
+    - /opt/publish_mod.py
+  before_delete:
+    - python3
+    - /opt/publish_mod.py
+    - --guard-delete
+  after_delete:
+    - python3
+    - /opt/publish_mod.py
+    - --after-delete
+status_probe:
+  interval_seconds: 10
+  argv:
+    - python3
+    - /opt/haos_defaults.py
+    - status-probe
+log_patterns:
+  ready:
+    - '(?i)done \(.*\)! for help'
+    - '(?i)starting minecraft server on'
+  player_join:
+    - '(?i)(?P<player>\S+) joined the game'
+  player_leave:
+    - '(?i)(?P<player>\S+) left the game'
+  game_version:
+    - '(?i)starting minecraft server version (?P<version>[\w.\-]+)'
 log_pattern_candidates:
   ready:
     - '(?i)done \(.*\)! for help'
