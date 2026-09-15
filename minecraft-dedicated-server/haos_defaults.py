@@ -58,7 +58,14 @@ def env_or_option(key: str, default: str = "") -> str:
 
 
 def minecraft_version() -> str:
-    raw = env_or_option("minecraft_version", DEFAULT_MC)
+    """HA Configuration pin. Prefer options.json over a stale container env."""
+
+    opt = options()
+    raw = str(opt.get("minecraft_version") or "").strip()
+    if not raw:
+        raw = str(os.environ.get("MINECRAFT_VERSION") or "").strip()
+    if not raw:
+        raw = DEFAULT_MC
     if not re.fullmatch(r"[0-9]+(?:\.[0-9]+){1,3}", raw):
         return DEFAULT_MC
     return raw
@@ -617,6 +624,16 @@ def prepare_game_command() -> list[str] | None:
         version = ha_version
         if not install_tree_ready(loader, version):
             print(
+                f"Installing Minecraft {version} ({loader}) into {install_dir()}…",
+                file=sys.stderr,
+            )
+            try:
+                cmd_install()
+            except (OSError, subprocess.CalledProcessError) as exc:
+                print(f"Install failed for Minecraft {version}: {exc}", file=sys.stderr)
+                return None
+        if not install_tree_ready(loader, version):
+            print(
                 f"Install tree missing for Minecraft {version} ({loader}): "
                 f"{install_tree(loader, version)}",
                 file=sys.stderr,
@@ -915,36 +932,28 @@ def findings_from_status_json(data: Any) -> dict[str, Any]:
 
 
 def cmd_status_probe() -> int:
-    """Supervisor status_probe argv: JSON object, omitted keys mean no yield."""
+    """Supervisor status_probe argv: JSON object, omitted keys mean no yield.
+
+    Occupancy comes from the Java status ping (SLP). Do not open RCON here:
+    each probe is a new process, so RCON would connect and disconnect every
+    tick and flood the game log with client start/shutdown lines. SLP already
+    asserts ``player_count`` and ``ready``.
+    """
 
     directory = profile_dir()
-    _ensure_rcon_properties(directory)
     props = read_server_properties(directory)
     findings: dict[str, Any] = {}
-    password = str(props.get("rcon.password") or "").strip() or _ensure_rcon_password()
-    rcon_port = _bind_port(props, "rcon.port", "RCON_PORT")
-    if str(props.get("enable-rcon") or "").lower() in {"true", "1", "yes", "on"} and rcon_port:
-        import struct
-
-        try:
-            listed = rcon_command("127.0.0.1", rcon_port, password, "list")
-        except (OSError, struct.error):
-            listed = None
-        count = parse_java_list_response(listed or "")
-        if count is not None:
-            findings["player_count"] = count
-    game_port = _bind_port(props, "server-port", "SERVER_PORT")
-    if game_port is not None:
-        try:
-            status = minecraft_status_payload("127.0.0.1", game_port)
-        except (OSError, json.JSONDecodeError, UnicodeDecodeError, ValueError):
-            status = {}
-        if "ready" in status:
-            findings["ready"] = True
-        if "game_version" in status and "game_version" not in findings:
-            findings["game_version"] = status["game_version"]
-        if "player_count" not in findings and "player_count" in status:
-            findings["player_count"] = status["player_count"]
+    game_port = _bind_port(props, "server-port", "SERVER_PORT") or 25565
+    try:
+        status = minecraft_status_payload("127.0.0.1", game_port)
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError, ValueError):
+        status = {}
+    if "ready" in status:
+        findings["ready"] = True
+    if "game_version" in status:
+        findings["game_version"] = status["game_version"]
+    if "player_count" in status:
+        findings["player_count"] = status["player_count"]
     print(json.dumps(findings, separators=(",", ":")), flush=True)
     from golden_boot import apply_probe_findings
 
