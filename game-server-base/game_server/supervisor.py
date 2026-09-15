@@ -667,6 +667,7 @@ class GameServerSupervisor:
             # Plain-language status for the UI (avoid "gating" jargon).
             "waits_for_empty_server": waits_for_empty_server,
             "player_tracking_mode": player_tracking_mode,
+            "status_probe": self.plugin.status_probe is not None,
             "debug_mode": bool(self.config.debug_mode),
             "steam_gate": self.steam_gate.to_dict(),
             "disk": {
@@ -971,12 +972,7 @@ class GameServerSupervisor:
     def _players_online(self) -> int | None:
         """Return player count when known; None when tracking cannot tell."""
 
-        state = self.monitor.state
-        if state.players:
-            return len(state.players)
-        if state.players_known and state.player_count is not None:
-            return int(state.player_count)
-        return None
+        return self.monitor.state.occupancy()
 
     def _restart_blocked_by_players(self) -> bool:
         """True when a deferred restart should wait for the last player to leave."""

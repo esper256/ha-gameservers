@@ -61,14 +61,18 @@ def apply_status_probe(state: MonitorState, payload: Any) -> None:
         if count >= 0:
             state.player_count = count
             state.players_known = True
+            state.player_count_asserted = True
             count_asserted = True
             if count == 0:
                 state.players.clear()
     if "players" in payload and payload["players"] is not None:
+        if count_asserted and state.player_count == 0:
+            return
         names_raw = payload["players"]
         if isinstance(names_raw, list):
             names = [str(item).strip() for item in names_raw if str(item).strip()]
             state.players = set(names)
             state.players_known = True
+            state.player_count_asserted = True
             if not count_asserted:
                 state.player_count = len(names)

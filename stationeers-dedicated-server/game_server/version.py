@@ -9,7 +9,7 @@ from pathlib import Path
 # ``{this}.{game_patch}`` (e.g. supervisor 3.0 → add-on 3.0.0; a game-only
 # reroll is 3.0.1). Bump this when the supervisor changes, then set every
 # game ``config.yaml`` to ``{new}.0``.
-SUPERVISOR_VERSION = "3.13"
+SUPERVISOR_VERSION = "3.14"
 
 _VERSION_FILES = (
     Path("/etc/hassio_app_version"),
