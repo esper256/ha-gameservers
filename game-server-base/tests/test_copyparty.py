@@ -11,7 +11,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from game_server.copyparty import CopypartyPublisher, CopypartySpec  # noqa: E402
+from game_server.copyparty import (  # noqa: E402
+    CopypartyPublisher,
+    CopypartySpec,
+    copyparty_lan_port,
+)
 from game_server.plugin import load_plugin  # noqa: E402
 
 FIXTURE = ROOT / "tests" / "fixtures" / "example.game.yaml"
@@ -39,6 +43,22 @@ class CopypartySpecTests(unittest.TestCase):
         self.assertEqual(spec.port, 9001)
         self.assertEqual(spec.root, "{data_dir}/{world_name}/mods")
         self.assertEqual(spec.after_idle_upload, ["python3", "/opt/publish.py"])
+
+
+class CopypartyLanPortTests(unittest.TestCase):
+    def test_falls_back_to_container_port(self) -> None:
+        self.assertEqual(copyparty_lan_port(8765, None), 8765)
+        self.assertEqual(copyparty_lan_port(8765, {}), 8765)
+        self.assertEqual(copyparty_lan_port(8765, {"25565/tcp": 25565}), 8765)
+
+    def test_uses_ha_network_host_mapping(self) -> None:
+        self.assertEqual(copyparty_lan_port(8765, {"8765/tcp": 19999}), 19999)
+        self.assertEqual(copyparty_lan_port(8765, {"8765": "19999"}), 19999)
+
+    def test_disabled_mapping_is_none(self) -> None:
+        self.assertIsNone(copyparty_lan_port(8765, {"8765/tcp": None}))
+        self.assertIsNone(copyparty_lan_port(8765, {"8765/tcp": False}))
+        self.assertIsNone(copyparty_lan_port(8765, {"8765/tcp": 0}))
 
 
 class CopypartyPublisherTests(unittest.TestCase):
@@ -123,6 +143,23 @@ class CopypartyPublisherTests(unittest.TestCase):
                 publisher.ui_status(),
                 {"port": 8765, "file_count": 1},
             )
+            from unittest.mock import patch
+
+            with patch(
+                "game_server.copyparty.fetch_addon_network",
+                return_value={"8765/tcp": 19999},
+            ):
+                publisher._network_cache = None
+                self.assertEqual(
+                    publisher.ui_status(),
+                    {"port": 19999, "file_count": 1},
+                )
+            with patch(
+                "game_server.copyparty.fetch_addon_network",
+                return_value={"8765/tcp": None},
+            ):
+                publisher._network_cache = None
+                self.assertIsNone(publisher.ui_status())
             self.assertIsNone(
                 CopypartyPublisher(
                     None,

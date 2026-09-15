@@ -22,7 +22,7 @@ configuration:
     description: Required to run the official dedicated server.
   publisher_password:
     name: Upload page password
-    description: Password for the mod-upload page on TCP 8765 (username is mods).
+    description: Password for the mod-upload page (username is mods). Host port is on Network (container 8765).
   java_opts:
     name: Java options
     description: JVM flags (default -Xms2G -Xmx4G).
@@ -73,4 +73,4 @@ configuration:
     description: Skip backups when free space is below this.
 network:
   25565/tcp: Minecraft Java (TCP). Players join host:25565.
-  8765/tcp: Mod-upload page. Keep on the LAN.
+  8765/tcp: Mod-upload page. Host port is on Network. Keep on the LAN.

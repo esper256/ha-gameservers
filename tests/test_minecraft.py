@@ -326,6 +326,32 @@ class PublishModTests(unittest.TestCase):
             self.assertEqual(prev.read_bytes(), b"sealed-payload")
             self.assertEqual(staged.read_bytes(), b"next-generation")
 
+    def test_stage_skips_vanished_upload_jars(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            world = Path(tmp) / "World"
+            uploaded = world / "uploaded_mods"
+            uploaded.mkdir(parents=True)
+            gone = uploaded / "cool_creepers.jar"
+            gone.write_bytes(b"sealed-payload")
+            os.chmod(gone, 0o444)
+            kept = uploaded / "jade.jar"
+            kept.write_bytes(b"kept-payload")
+            os.chmod(kept, 0o444)
+            real_sealed = haos_defaults.sealed_jars
+
+            def vanish_then_list(folder: Path) -> list[Path]:
+                jars = real_sealed(folder)
+                gone.unlink()
+                return jars
+
+            haos_defaults.sealed_jars = vanish_then_list  # type: ignore[method-assign]
+            try:
+                haos_defaults.stage_mod_snapshot(world)
+            finally:
+                haos_defaults.sealed_jars = real_sealed  # type: ignore[method-assign]
+            self.assertFalse((world / "mods" / "cool_creepers.jar").exists())
+            self.assertEqual((world / "mods" / "jade.jar").read_bytes(), b"kept-payload")
+
 
 class LaunchLinkTests(unittest.TestCase):
     def tearDown(self) -> None:

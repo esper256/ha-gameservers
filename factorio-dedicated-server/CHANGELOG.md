@@ -1,5 +1,9 @@
 # Changelog
 
+## 3.11.0
+
+- No player-facing changes for this game.
+
 ## 3.10.1
 
 - Default save name and welcome message are generic.

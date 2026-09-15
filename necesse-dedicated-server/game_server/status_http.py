@@ -2118,7 +2118,7 @@ def hostname_from_host_header(host: str) -> str:
 
 
 def copyparty_lan_href(port: int, host_header: str = "") -> str:
-    """http://<lan-host>:<copyparty-port>/ — Copyparty is not on Ingress."""
+    """http://<lan-host>:<host-port>/ — Copyparty is not on Ingress."""
 
     if port < 1 or port > 65535:
         return "#"
@@ -2139,6 +2139,7 @@ def _format_copyparty(
     if not isinstance(data, dict) or not data:
         return "hidden", "—", "", "#", True, 0
     try:
+        # ``port`` is the HA Network *host* mapping, not the in-container bind.
         port = int(data.get("port") or 0)
     except (TypeError, ValueError):
         port = 0
