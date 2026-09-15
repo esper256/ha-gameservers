@@ -18,6 +18,7 @@ import sys
 sys.path.insert(0, str(MC))
 sys.path.insert(0, str(ROOT / "game-server-base"))
 
+import golden_boot  # noqa: E402
 import haos_defaults  # noqa: E402
 import publish_mod  # noqa: E402
 
@@ -73,6 +74,13 @@ def _has_golden(world: Path) -> bool:
     return (world / "golden_mods").is_dir()
 
 
+def _write_ha_pin(tmp: Path, version: str) -> Path:
+    options = tmp / "options.json"
+    options.write_text(json.dumps({"minecraft_version": version}), encoding="utf-8")
+    os.environ["OPTIONS_FILE"] = str(options)
+    return options
+
+
 def _boot_mode(world: Path) -> str:
     path = world / "boot.json"
     if not path.is_file():
@@ -111,14 +119,14 @@ class GoldenBootContractTests(unittest.TestCase):
         os.environ["DATA_DIR"] = str(worlds)
         os.environ["STATE_DIR"] = str(tmp / "state")
         os.environ["INSTALL_DIR"] = str(installs)
-        os.environ["MINECRAFT_VERSION"] = version
         os.environ["JAVA_OPTS"] = "-Xms32M"
         os.environ["SERVER_PORT"] = "25565"
+        _write_ha_pin(tmp, version)
         Path(os.environ["STATE_DIR"]).mkdir(parents=True, exist_ok=True)
         _fake_neoforge(installs, "1.21.1")
         _fake_neoforge(installs, "1.21.11")
         (world / "profile.json").write_text(
-            json.dumps({"loader": "neoforge", "minecraft_version": "1.21.1"}),
+            json.dumps({"loader": "neoforge"}),
             encoding="utf-8",
         )
         return world
@@ -167,7 +175,7 @@ class GoldenBootContractTests(unittest.TestCase):
             haos_defaults.prepare_game_command()
             self._probe(ready=True)
             self.assertTrue(_has_golden(world))
-            os.environ["MINECRAFT_VERSION"] = "1.21.11"
+            _write_ha_pin(Path(tmp), "1.21.11")
             haos_defaults.prepare_game_command()
             self._probe(ready=True)
             meta = json.loads((world / "golden.json").read_text(encoding="utf-8"))
@@ -246,7 +254,7 @@ class GoldenBootContractTests(unittest.TestCase):
             self._probe(ready=True)
             haos_defaults.prepare_game_command()
             self.assertEqual(_boot_mode(world), "golden")
-            os.environ["MINECRAFT_VERSION"] = "1.21.11"
+            _write_ha_pin(Path(tmp), "1.21.11")
             haos_defaults.prepare_game_command()
             self.assertEqual(_boot_mode(world), "attempt")
             self.assertTrue((world / "server.jar").exists())
@@ -278,7 +286,7 @@ class GoldenBootContractTests(unittest.TestCase):
             haos_defaults.prepare_game_command()
             self._probe(ready=True)
             self.assertTrue(_has_golden(world))
-            os.environ["MINECRAFT_VERSION"] = "1.21.11"
+            _write_ha_pin(Path(tmp), "1.21.11")
             haos_defaults.prepare_game_command()
             self.assertEqual(_boot_mode(world), "attempt")
             haos_defaults.prepare_game_command()
@@ -321,7 +329,7 @@ class GoldenBootContractTests(unittest.TestCase):
             haos_defaults.prepare_game_command()
             self._probe(ready=True)
             self.assertTrue(_has_golden(world))
-            os.environ["MINECRAFT_VERSION"] = "1.21.11"
+            _write_ha_pin(Path(tmp), "1.21.11")
             haos_defaults.prepare_game_command()
             self.assertEqual(_boot_mode(world), "attempt")
             shutil.rmtree(Path(os.environ["INSTALL_DIR"]) / "neoforge-1.21.1")
@@ -329,6 +337,72 @@ class GoldenBootContractTests(unittest.TestCase):
             self.assertIsNotNone(cmd)
             self.assertEqual(_boot_mode(world), "attempt")
             self.assertTrue((world / "server.jar").exists())
+
+    def test_choose_boot_mode_ignores_leftover_attempt_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            world = Path(tmp)
+            (world / "golden_mods").mkdir()
+            (world / "golden.json").write_text(
+                json.dumps({"loader": "neoforge", "minecraft_version": "1.21.1"}),
+                encoding="utf-8",
+            )
+            (world / "attempt_state.json").write_text(
+                json.dumps(
+                    {
+                        "last_attempt_ha_version": "1.21.1",
+                        "last_attempt_loader": "neoforge",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            self.assertEqual(
+                golden_boot.choose_boot_mode(
+                    world, ha_version="1.21.11", loader="neoforge"
+                ),
+                "attempt",
+            )
+            self.assertEqual(
+                golden_boot.choose_boot_mode(
+                    world, ha_version="1.21.1", loader="neoforge"
+                ),
+                "golden",
+            )
+
+    def test_choose_boot_mode_crash_falls_back_then_retries_ha_pin(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            world = Path(tmp)
+            (world / "golden_mods").mkdir()
+            (world / "golden.json").write_text(
+                json.dumps({"loader": "neoforge", "minecraft_version": "1.21.1"}),
+                encoding="utf-8",
+            )
+            golden_boot.write_boot_session(
+                world,
+                mode="attempt",
+                loader="neoforge",
+                minecraft_version="1.21.11",
+                stock=True,
+            )
+            self.assertEqual(
+                golden_boot.choose_boot_mode(
+                    world, ha_version="1.21.11", loader="neoforge"
+                ),
+                "golden",
+            )
+            golden_boot.write_boot_session(
+                world,
+                mode="golden",
+                loader="neoforge",
+                minecraft_version="1.21.1",
+                stock=True,
+                proven=True,
+            )
+            self.assertEqual(
+                golden_boot.choose_boot_mode(
+                    world, ha_version="1.21.11", loader="neoforge"
+                ),
+                "attempt",
+            )
 
     def test_minecraft_only_state_no_supervisor_golden_api(self) -> None:
         base = ROOT / "game-server-base"

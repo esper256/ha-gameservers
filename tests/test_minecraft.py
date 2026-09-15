@@ -30,6 +30,15 @@ import haos_defaults  # noqa: E402
 import publish_mod  # noqa: E402
 
 
+def _write_ha_pin(tmp: Path, version: str = "1.21.1", **extra: object) -> Path:
+    options = tmp / "options.json"
+    payload: dict[str, object] = {"minecraft_version": version}
+    payload.update(extra)
+    options.write_text(json.dumps(payload), encoding="utf-8")
+    os.environ["OPTIONS_FILE"] = str(options)
+    return options
+
+
 def _jar(path: Path, *, fabric: bool = True, mod_id: str = "cool_creepers") -> None:
     with zipfile.ZipFile(path, "w") as zf:
         if fabric:
@@ -141,10 +150,18 @@ class MinecraftPluginTests(unittest.TestCase):
         self.assertIn("mc-image-helper", text)
         self.assertIn("server-starter.jar", text)
 
-    def test_run_sh_publishes_live_pin(self) -> None:
+    def test_run_sh_does_not_copy_the_pin(self) -> None:
         runsh = (MC / "run.sh").read_text(encoding="utf-8")
-        self.assertIn("publish-pin", runsh)
-        self.assertIn("Exported MINECRAFT_VERSION", runsh)
+        defaults = (MC / "haos_defaults.py").read_text(encoding="utf-8")
+        golden = (MC / "golden_boot.py").read_text(encoding="utf-8")
+        self.assertIn("chmod a+r", runsh)
+        self.assertIn("OPTIONS_FILE", runsh)
+        self.assertNotIn("publish-pin", runsh)
+        self.assertNotIn("Exported MINECRAFT_VERSION", runsh)
+        self.assertNotIn("supervisor/addons/self/info", defaults)
+        self.assertNotIn("minecraft_pin.json", defaults)
+        self.assertNotIn("last_attempt_ha_version", golden)
+        self.assertNotIn("attempt_state.json", golden)
 
     def test_no_minecraft_in_supervisor(self) -> None:
         hits = []
@@ -166,7 +183,13 @@ class MinecraftPluginTests(unittest.TestCase):
 
 class PublishModTests(unittest.TestCase):
     def tearDown(self) -> None:
-        for key in ("DATA_DIR", "STATE_DIR", "MOD_PUBLISHER_DIR"):
+        for key in (
+            "DATA_DIR",
+            "STATE_DIR",
+            "MOD_PUBLISHER_DIR",
+            "OPTIONS_FILE",
+            "MINECRAFT_VERSION",
+        ):
             os.environ.pop(key, None)
 
     def test_inspect_and_replace_by_mod_id(self) -> None:
@@ -175,9 +198,10 @@ class PublishModTests(unittest.TestCase):
             worlds = root / "worlds" / "World"
             worlds.mkdir(parents=True)
             (worlds / "profile.json").write_text(
-                json.dumps({"loader": "fabric", "minecraft_version": "1.21.1"}),
+                json.dumps({"loader": "fabric"}),
                 encoding="utf-8",
             )
+            _write_ha_pin(root)
             publisher = root / "publisher"
             incoming = publisher / "incoming"
             incoming.mkdir(parents=True)
@@ -211,6 +235,7 @@ class PublishModTests(unittest.TestCase):
             (worlds / "profile.json").write_text(
                 json.dumps({"loader": "neoforge"}), encoding="utf-8"
             )
+            _write_ha_pin(root)
             publisher = root / "publisher"
             incoming = publisher / "incoming"
             incoming.mkdir(parents=True)
@@ -236,6 +261,7 @@ class PublishModTests(unittest.TestCase):
             (worlds / "profile.json").write_text(
                 json.dumps({"loader": "neoforge"}), encoding="utf-8"
             )
+            _write_ha_pin(root)
             publisher = root / "publisher"
             incoming = publisher / "incoming"
             incoming.mkdir(parents=True)
@@ -254,9 +280,10 @@ class PublishModTests(unittest.TestCase):
             worlds = root / "worlds" / "World"
             worlds.mkdir(parents=True)
             (worlds / "profile.json").write_text(
-                json.dumps({"loader": "neoforge", "minecraft_version": "1.21.1"}),
+                json.dumps({"loader": "neoforge"}),
                 encoding="utf-8",
             )
+            _write_ha_pin(root, "1.21.1")
             publisher = root / "publisher"
             incoming = publisher / "incoming"
             incoming.mkdir(parents=True)
@@ -480,9 +507,10 @@ class PublishModTests(unittest.TestCase):
             worlds = root / "worlds" / "World"
             worlds.mkdir(parents=True)
             (worlds / "profile.json").write_text(
-                json.dumps({"loader": "neoforge", "minecraft_version": "1.21.1"}),
+                json.dumps({"loader": "neoforge"}),
                 encoding="utf-8",
             )
+            _write_ha_pin(root)
             publisher = root / "publisher"
             os.environ["DATA_DIR"] = str(root / "worlds")
             os.environ["STATE_DIR"] = str(root / "state")
@@ -509,9 +537,10 @@ class PublishModTests(unittest.TestCase):
             worlds = root / "worlds" / "World"
             worlds.mkdir(parents=True)
             (worlds / "profile.json").write_text(
-                json.dumps({"loader": "fabric", "minecraft_version": "1.21.1"}),
+                json.dumps({"loader": "fabric"}),
                 encoding="utf-8",
             )
+            _write_ha_pin(root)
             os.environ["DATA_DIR"] = str(root / "worlds")
             os.environ["STATE_DIR"] = str(root / "state")
             os.environ["MOD_PUBLISHER_DIR"] = str(root / "publisher")
@@ -569,9 +598,10 @@ class PublishModTests(unittest.TestCase):
             Path(os.environ["STATE_DIR"]).mkdir(parents=True, exist_ok=True)
             Path(os.environ["MOD_PUBLISHER_DIR"]).mkdir(parents=True, exist_ok=True)
             (data / "World" / "profile.json").write_text(
-                json.dumps({"loader": "neoforge", "minecraft_version": "1.21.1"}),
+                json.dumps({"loader": "neoforge"}),
                 encoding="utf-8",
             )
+            _write_ha_pin(root)
             publisher = CopypartyPublisher(
                 spec,
                 state_dir=str(root / "state"),
@@ -643,8 +673,8 @@ class HaVersionPinTests(unittest.TestCase):
         os.environ["DATA_DIR"] = str(worlds)
         os.environ["STATE_DIR"] = str(tmp / "state")
         os.environ["INSTALL_DIR"] = str(installs)
-        os.environ["MINECRAFT_VERSION"] = version
         os.environ["JAVA_OPTS"] = "-Xms32M"
+        _write_ha_pin(tmp, version)
         Path(os.environ["STATE_DIR"]).mkdir(parents=True, exist_ok=True)
         for ver in ("1.21.1", "1.21.11"):
             inst = installs / f"neoforge-{ver}"
@@ -652,7 +682,7 @@ class HaVersionPinTests(unittest.TestCase):
             (inst / "server.jar").write_bytes(b"starter")
             (inst / "run.sh").write_text("#!/bin/sh\n", encoding="utf-8")
         (world / "profile.json").write_text(
-            json.dumps({"loader": "neoforge", "minecraft_version": "1.21.1"}),
+            json.dumps({"loader": "neoforge"}),
             encoding="utf-8",
         )
         uploaded = world / "uploaded_mods"
@@ -683,7 +713,10 @@ class HaVersionPinTests(unittest.TestCase):
             uploaded = world / "uploaded_mods"
             (uploaded / "automodpack.jar").write_bytes(b"old-seed")
             os.chmod(uploaded / "automodpack.jar", 0o444)
-            os.environ["MINECRAFT_VERSION"] = "1.21.11"
+            with patch.object(haos_defaults, "_seed_infrastructure", return_value=None):
+                with patch.object(haos_defaults, "_link_install", return_value=None):
+                    self.assertEqual(haos_defaults.cmd_prepare_world(), 0)
+            _write_ha_pin(Path(tmp), "1.21.11")
             with patch.object(haos_defaults, "_seed_infrastructure") as seed:
                 with patch.object(haos_defaults, "_link_install", return_value=None):
                     self.assertEqual(haos_defaults.cmd_prepare_world(), 0)
@@ -697,15 +730,6 @@ class HaVersionPinTests(unittest.TestCase):
     def test_options_json_pin_beats_stale_env(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             world = self._env(Path(tmp), "1.21.1")
-            (world / "attempt_state.json").write_text(
-                json.dumps(
-                    {
-                        "last_attempt_ha_version": "1.21.1",
-                        "last_attempt_loader": "neoforge",
-                    }
-                ),
-                encoding="utf-8",
-            )
             (world / "golden.json").write_text(
                 json.dumps(
                     {
@@ -717,11 +741,7 @@ class HaVersionPinTests(unittest.TestCase):
                 encoding="utf-8",
             )
             (world / "golden_mods").mkdir()
-            options = Path(tmp) / "options.json"
-            options.write_text(
-                json.dumps({"minecraft_version": "1.21.11"}), encoding="utf-8"
-            )
-            os.environ["OPTIONS_FILE"] = str(options)
+            _write_ha_pin(Path(tmp), "1.21.11")
             os.environ["MINECRAFT_VERSION"] = "1.21.1"
             self.assertEqual(haos_defaults.minecraft_version(), "1.21.11")
             cmd = haos_defaults.prepare_game_command()
@@ -733,91 +753,45 @@ class HaVersionPinTests(unittest.TestCase):
             target = (world / "server.jar").resolve()
             self.assertIn("neoforge-1.21.11", str(target))
 
-    def test_supervisor_api_pin_beats_stale_options_json(self) -> None:
-        """The live HA Configuration tab wins if /data/options.json is stale."""
-
+    def test_unreadable_options_fails_loudly(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            world = self._env(Path(tmp), "1.21.1")
-            (world / "attempt_state.json").write_text(
-                json.dumps(
-                    {
-                        "last_attempt_ha_version": "1.21.1",
-                        "last_attempt_loader": "neoforge",
-                    }
-                ),
-                encoding="utf-8",
-            )
-            (world / "golden.json").write_text(
-                json.dumps(
-                    {
-                        "loader": "neoforge",
-                        "minecraft_version": "1.21.1",
-                        "stock": True,
-                    }
-                ),
-                encoding="utf-8",
-            )
-            (world / "golden_mods").mkdir()
             options = Path(tmp) / "options.json"
-            options.write_text(
-                json.dumps({"minecraft_version": "1.21.1"}), encoding="utf-8"
-            )
+            options.write_text("{", encoding="utf-8")
             os.environ["OPTIONS_FILE"] = str(options)
-            os.environ["MINECRAFT_VERSION"] = "1.21.1"
-            with patch.object(
-                haos_defaults,
-                "fetch_ha_addon_options",
-                return_value=({"minecraft_version": "1.21.11"}, ""),
-            ):
-                pin = haos_defaults.resolve_minecraft_pin()
-                self.assertEqual(pin["minecraft_version"], "1.21.11")
-                self.assertEqual(pin["source"], "supervisor-api")
-                self.assertIn("supervisor-api", haos_defaults.explain_minecraft_pin(pin))
-                cmd = haos_defaults.prepare_game_command()
-            self.assertIsNotNone(cmd)
-            session = json.loads((world / "boot.json").read_text(encoding="utf-8"))
-            self.assertEqual(session.get("mode"), "attempt")
-            self.assertEqual(session.get("minecraft_version"), "1.21.11")
-            target = (world / "server.jar").resolve()
-            self.assertIn("neoforge-1.21.11", str(target))
+            os.environ["MINECRAFT_VERSION"] = "1.21.11"
+            with self.assertRaises(haos_defaults.MinecraftPinError) as raised:
+                haos_defaults.minecraft_version()
+            self.assertIn(str(options), str(raised.exception))
+            self.assertNotIn("1.21.11", haos_defaults._normalize_mc_version("{"))
 
-    def test_unreadable_options_without_api_uses_default_and_explains(self) -> None:
+    def test_compose_env_pin_only_when_options_file_absent(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            os.environ["OPTIONS_FILE"] = str(Path(tmp) / "options.json")
+            os.environ["MINECRAFT_VERSION"] = "1.21.11"
+            self.assertEqual(haos_defaults.minecraft_version(), "1.21.11")
+            self.assertIn("MINECRAFT_VERSION", haos_defaults.explain_minecraft_pin())
+
+    def test_missing_pin_fails_loudly(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             os.environ["OPTIONS_FILE"] = str(Path(tmp) / "options.json")
             os.environ.pop("MINECRAFT_VERSION", None)
-            os.environ["STATE_DIR"] = str(Path(tmp) / "state")
-            Path(os.environ["STATE_DIR"]).mkdir(parents=True, exist_ok=True)
-            with patch.object(
-                haos_defaults,
-                "_read_options_file",
-                return_value=({}, "unreadable /data/options.json: Permission denied"),
-            ):
-                pin = haos_defaults.resolve_minecraft_pin()
-            self.assertEqual(pin["minecraft_version"], "1.21.1")
-            self.assertEqual(pin["source"], "default")
-            self.assertIn("unreadable", pin["file_error"])
-            self.assertIn("source=default", haos_defaults.explain_minecraft_pin(pin))
+            with self.assertRaises(haos_defaults.MinecraftPinError):
+                haos_defaults.minecraft_version()
 
-    def test_print_version_logs_source_and_prints_pin_last(self) -> None:
+    def test_print_version_logs_file_path_and_prints_pin_last(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            options = Path(tmp) / "options.json"
-            options.write_text(
-                json.dumps({"minecraft_version": "1.21.11"}), encoding="utf-8"
-            )
-            os.environ["OPTIONS_FILE"] = str(options)
+            options = _write_ha_pin(Path(tmp), "1.21.11")
             os.environ.pop("MINECRAFT_VERSION", None)
             from io import StringIO
 
             captured = StringIO()
             with patch.object(sys, "stderr", captured):
                 self.assertEqual(haos_defaults.cmd_print_version(), 0)
-            self.assertIn("source=options-json", captured.getvalue())
-            self.assertIn("1.21.11", captured.getvalue())
+            self.assertIn(f"Minecraft pin 1.21.11 from {options}", captured.getvalue())
 
     def test_missing_pin_tree_runs_install(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            world = self._env(Path(tmp), "1.21.1")
-            os.environ["MINECRAFT_VERSION"] = "1.21.11"
+            world = self._env(Path(tmp), "1.21.11")
             shutil.rmtree(Path(os.environ["INSTALL_DIR"]) / "neoforge-1.21.11")
 
             def _install() -> int:
@@ -845,7 +819,6 @@ class HaVersionPinTests(unittest.TestCase):
     def test_missing_install_fails_clearly(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             self._env(Path(tmp), "1.99.9")
-            os.environ["MINECRAFT_VERSION"] = "1.99.9"
             with patch.object(haos_defaults, "cmd_install", return_value=0) as install:
                 cmd = haos_defaults.prepare_game_command()
             install.assert_called_once()

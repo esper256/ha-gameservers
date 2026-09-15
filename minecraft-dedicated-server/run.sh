@@ -38,12 +38,6 @@ else
   echo "No options.json at ${OPTIONS_FILE}; using environment defaults"
 fi
 
-# Resolve the live Configuration pin as root (Supervisor API, then options.json)
-# and export it so later gameserver-uid helpers cannot fall back to 1.21.1.
-PIN="$(python3 /opt/haos_defaults.py publish-pin | tail -n 1)"
-export MINECRAFT_VERSION="${PIN}"
-echo "Exported MINECRAFT_VERSION=${MINECRAFT_VERSION}"
-
 python3 /opt/haos_defaults.py write-copyparty-banner
 echo "Copyparty file-drop on TCP 8765 (upload folder, supervisor)"
 

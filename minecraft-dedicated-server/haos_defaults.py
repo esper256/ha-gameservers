@@ -15,11 +15,9 @@ import subprocess
 import sys
 from pathlib import Path
 from typing import Any
-from urllib.request import Request, urlopen
 
 HELPER = Path("/opt/mc-image-helper/bin/mc-image-helper")
 STARTER_JAR = Path("/opt/server-starter.jar")
-DEFAULT_MC = "1.21.1"
 PROTECTED_MOD_IDS = frozenset(
     {
         "automodpack",
@@ -36,7 +34,8 @@ UPLOADED_MODS = "uploaded_mods"
 MODS_SNAPSHOT = "mods"
 
 
-PIN_STATE = "minecraft_pin.json"
+class MinecraftPinError(RuntimeError):
+    """HA options.json is the only desired pin; refuse a silent fallback."""
 
 
 def options_path() -> Path:
@@ -65,12 +64,7 @@ def _read_options_file() -> tuple[dict[str, Any], str]:
 
 
 def env_or_option(key: str, default: str = "") -> str:
-    """HA ``options.json`` wins over a leftover process env value.
-
-    Home Assistant writes the live pin on each start. Docker/compose may still
-    export ``MINECRAFT_VERSION`` from the first launch; that must not freeze
-    the Configuration tab.
-    """
+    """HA ``options.json`` wins over a leftover process env value."""
 
     opt = options()
     if key in opt and str(opt.get(key) or "").strip():
@@ -88,115 +82,38 @@ def _normalize_mc_version(raw: object) -> str:
     return text
 
 
-def fetch_ha_addon_options() -> tuple[dict[str, Any] | None, str]:
-    """Live add-on options from Supervisor. Empty if the API is unavailable."""
+def minecraft_pin_source() -> tuple[str, str]:
+    """Desired pin: HA options.json. Compose env only if that file is absent."""
 
-    token = (os.environ.get("SUPERVISOR_TOKEN") or "").strip()
-    if not token:
-        return None, "no SUPERVISOR_TOKEN"
-    url = "http://supervisor/addons/self/info"
-    req = Request(
-        url,
-        headers={
-            "Authorization": f"Bearer {token}",
-            "Accept": "application/json",
-            "User-Agent": "haos-minecraft-addon",
-        },
+    path = options_path()
+    if path.is_file():
+        data, err = _read_options_file()
+        if err:
+            raise MinecraftPinError(f"Cannot read Minecraft pin from {path}: {err}")
+        version = _normalize_mc_version(data.get("minecraft_version"))
+        if not version:
+            raise MinecraftPinError(
+                f"minecraft_version missing or invalid in {path}: "
+                f"{data.get('minecraft_version')!r}"
+            )
+        return version, str(path)
+    env = _normalize_mc_version(os.environ.get("MINECRAFT_VERSION"))
+    if env:
+        return env, "MINECRAFT_VERSION (no options.json)"
+    raise MinecraftPinError(
+        f"No Minecraft pin: {path} is missing and MINECRAFT_VERSION is unset"
     )
-    try:
-        with urlopen(req, timeout=8) as resp:  # noqa: S310
-            parsed = json.loads(resp.read().decode("utf-8"))
-    except (OSError, json.JSONDecodeError, TimeoutError, ValueError) as exc:
-        return None, f"{url}: {exc}"
-    if not isinstance(parsed, dict):
-        return None, f"{url}: not an object"
-    data = parsed.get("data") if isinstance(parsed.get("data"), dict) else parsed
-    if not isinstance(data, dict):
-        return None, f"{url}: missing data"
-    options = data.get("options")
-    if not isinstance(options, dict):
-        return None, f"{url}: missing options"
-    return options, ""
-
-
-def _read_pin_state() -> str:
-    path = state_dir() / PIN_STATE
-    if not path.is_file():
-        return ""
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return ""
-    if not isinstance(data, dict):
-        return ""
-    return _normalize_mc_version(data.get("minecraft_version"))
-
-
-def resolve_minecraft_pin() -> dict[str, Any]:
-    """Live HA pin. Supervisor API wins over a stale or unreadable options.json."""
-
-    api_options, api_error = fetch_ha_addon_options()
-    api_value = _normalize_mc_version(
-        (api_options or {}).get("minecraft_version") if api_options else ""
-    )
-    file_options, file_error = _read_options_file()
-    file_value = _normalize_mc_version(file_options.get("minecraft_version"))
-    env_value = _normalize_mc_version(os.environ.get("MINECRAFT_VERSION"))
-    state_value = _read_pin_state()
-    if api_value:
-        version, source = api_value, "supervisor-api"
-    elif file_value:
-        version, source = file_value, "options-json"
-    elif env_value:
-        version, source = env_value, "env"
-    elif state_value:
-        version, source = state_value, "pin-state"
-    else:
-        version, source = DEFAULT_MC, "default"
-    return {
-        "minecraft_version": version,
-        "source": source,
-        "api_value": api_value,
-        "api_error": api_error,
-        "file_value": file_value,
-        "file_error": file_error,
-        "file_path": str(options_path()),
-        "env_value": env_value,
-        "state_value": state_value,
-    }
-
-
-def explain_minecraft_pin(pin: dict[str, Any] | None = None) -> str:
-    pin = pin or resolve_minecraft_pin()
-    return (
-        f"Minecraft pin {pin['minecraft_version']} source={pin['source']} "
-        f"(supervisor-api={pin['api_value'] or pin['api_error']}; "
-        f"options.json={pin['file_value'] or pin['file_error']}; "
-        f"env={pin['env_value'] or '-'})"
-    )
-
-
-def write_pin_state(pin: dict[str, Any] | None = None) -> Path:
-    pin = pin or resolve_minecraft_pin()
-    path = state_dir() / PIN_STATE
-    write_json(
-        path,
-        {
-            "minecraft_version": pin["minecraft_version"],
-            "source": pin["source"],
-        },
-    )
-    try:
-        path.chmod(0o644)
-    except OSError:
-        pass
-    return path
 
 
 def minecraft_version() -> str:
-    """HA Configuration pin (Supervisor API, then options.json, then env)."""
+    """HA Configuration pin from options.json (compose env if that file is absent)."""
 
-    return str(resolve_minecraft_pin()["minecraft_version"])
+    return minecraft_pin_source()[0]
+
+
+def explain_minecraft_pin() -> str:
+    version, source = minecraft_pin_source()
+    return f"Minecraft pin {version} from {source}"
 
 
 def install_dir() -> Path:
@@ -413,19 +330,8 @@ def write_json(path: Path, payload: dict[str, Any]) -> None:
 
 
 def cmd_print_version() -> int:
-    pin = resolve_minecraft_pin()
-    print(explain_minecraft_pin(pin), file=sys.stderr, flush=True)
-    print(pin["minecraft_version"], flush=True)
-    return 0
-
-
-def cmd_publish_pin() -> int:
-    """Resolve the live HA pin as root, persist it, print it last for run.sh."""
-
-    pin = resolve_minecraft_pin()
-    write_pin_state(pin)
-    print(explain_minecraft_pin(pin), flush=True)
-    print(pin["minecraft_version"], flush=True)
+    print(explain_minecraft_pin(), file=sys.stderr, flush=True)
+    print(minecraft_version(), flush=True)
     return 0
 
 
@@ -467,9 +373,8 @@ def helper_server_entry(install: Path) -> Path | None:
 
 
 def cmd_install() -> int:
-    pin = resolve_minecraft_pin()
-    version = str(pin["minecraft_version"])
-    print(explain_minecraft_pin(pin), flush=True)
+    version = minecraft_version()
+    print(explain_minecraft_pin(), flush=True)
     root = install_dir()
     root.mkdir(parents=True, exist_ok=True)
     fabric = root / f"fabric-{version}"
@@ -539,11 +444,11 @@ def cmd_prepare_world() -> int:
     ).strip().lower()
     if loader not in {"neoforge", "fabric"}:
         loader = "neoforge"
-    pin = resolve_minecraft_pin()
-    version = str(pin["minecraft_version"])
-    print(explain_minecraft_pin(pin), flush=True)
+    version = minecraft_version()
+    print(explain_minecraft_pin(), flush=True)
+    last_applied = str(profile.get("minecraft_version") or "").strip()
     pin_changed = (
-        str(profile.get("minecraft_version") or "").strip() != version
+        last_applied != version
         or str(profile.get("loader") or "").strip().lower() != loader
     )
     write_json(
@@ -740,7 +645,6 @@ def prepare_game_command() -> list[str] | None:
         consume_attempt_request,
         extra_player_jars,
         load_golden_meta,
-        record_attempt_state,
         stage_golden_snapshot,
         write_boot_session,
     )
@@ -750,9 +654,8 @@ def prepare_game_command() -> list[str] | None:
     loader = str(profile.get("loader") or "neoforge").lower()
     if loader not in {"neoforge", "fabric"}:
         loader = "neoforge"
-    pin = resolve_minecraft_pin()
-    ha_version = str(pin["minecraft_version"])
-    print(explain_minecraft_pin(pin), flush=True)
+    ha_version = minecraft_version()
+    print(explain_minecraft_pin(), flush=True)
     mode = choose_boot_mode(directory, ha_version=ha_version, loader=loader)
     meta = load_golden_meta(directory) if mode == "golden" else None
     if mode == "golden" and meta is None:
@@ -812,7 +715,6 @@ def prepare_game_command() -> list[str] | None:
             )
             return None
         consume_attempt_request(directory)
-        record_attempt_state(directory, ha_version=ha_version, loader=loader)
         _link_install(directory, loader, version)
         _ensure_rcon_properties(directory)
         stage_mod_snapshot(directory)
@@ -1196,7 +1098,6 @@ def main(argv: list[str]) -> int:
     cmd = argv[1] if len(argv) > 1 else ""
     handlers = {
         "print-version": cmd_print_version,
-        "publish-pin": cmd_publish_pin,
         "install": cmd_install,
         "prepare-world": cmd_prepare_world,
         "run": cmd_run,
@@ -1205,13 +1106,16 @@ def main(argv: list[str]) -> int:
     }
     if cmd not in handlers:
         print(
-            "Usage: haos_defaults.py print-version|publish-pin|install|prepare-world|run|"
+            "Usage: haos_defaults.py print-version|install|prepare-world|run|"
             "write-copyparty-banner|status-probe",
             file=sys.stderr,
         )
         return 2
     try:
         return handlers[cmd]()
+    except MinecraftPinError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
     except subprocess.CalledProcessError as exc:
         print(f"command failed: {exc}", file=sys.stderr)
         return exc.returncode or 1

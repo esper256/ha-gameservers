@@ -24,7 +24,6 @@ from haos_defaults import (
 GOLDEN_DIR = "golden_mods"
 GOLDEN_META = "golden.json"
 BOOT_SESSION = "boot.json"
-ATTEMPT_STATE = "attempt_state.json"
 ATTEMPT_REQUEST = "attempt.request"
 
 BootMode = Literal["attempt", "golden"]
@@ -95,10 +94,6 @@ def load_boot_session(directory: Path) -> dict[str, Any]:
     return _read_json(directory / BOOT_SESSION)
 
 
-def load_attempt_state(directory: Path) -> dict[str, Any]:
-    return _read_json(directory / ATTEMPT_STATE)
-
-
 def attempt_needs_player(
     directory: Path,
     *,
@@ -122,57 +117,35 @@ def attempt_needs_player(
 
 def _pin_matches(payload: dict[str, Any], *, ha_version: str, loader: str) -> bool:
     return (
-        str(payload.get("minecraft_version") or payload.get("last_attempt_ha_version") or "").strip()
-        == str(ha_version)
-        and str(payload.get("loader") or payload.get("last_attempt_loader") or "").strip()
-        == str(loader)
+        str(payload.get("minecraft_version") or "").strip() == str(ha_version)
+        and str(payload.get("loader") or "").strip() == str(loader)
     )
 
 
 def choose_boot_mode(
     directory: Path, *, ha_version: str, loader: str
 ) -> BootMode:
-    """attempt = stage uploads onto the HA pin; golden = boot the proven snapshot."""
+    """attempt = HA options.json pin + uploads; golden = last-known-good after a crash."""
 
-    requested = attempt_requested(directory)
-    state = load_attempt_state(directory)
-    last_ha = str(state.get("last_attempt_ha_version") or "").strip()
-    last_loader = str(state.get("last_attempt_loader") or "").strip()
-    pin_changed = last_ha != str(ha_version) or last_loader != str(loader)
+    if attempt_requested(directory):
+        return "attempt"
     session = load_boot_session(directory)
     unproven_attempt = (
         str(session.get("mode") or "") == "attempt"
         and not bool(session.get("proven"))
     )
     meta = load_golden_meta(directory)
-    golden_stale = meta is not None and not _pin_matches(
-        meta, ha_version=ha_version, loader=loader
-    )
-    if requested or not last_ha:
-        return "attempt"
-    # Crash-loop fallback: the JVM just died on this same HA pin. Do not restage.
-    if unproven_attempt and meta is not None and _pin_matches(
-        session, ha_version=ha_version, loader=loader
+    # Crash fallback: this HA pin just died unproven. Boot the last proven snapshot.
+    if (
+        unproven_attempt
+        and meta is not None
+        and _pin_matches(session, ha_version=ha_version, loader=loader)
     ):
         return "golden"
-    # A later start (addon restart, operator stop/start) must retry the HA pin
-    # even if last_attempt already recorded it. Otherwise a stopped/unproven
-    # pin change boots the old golden forever.
-    if pin_changed or golden_stale:
-        return "attempt"
-    if meta is not None:
+    # Desired pin differs from the proven snapshot (or there is none): try HA config.
+    if meta is not None and _pin_matches(meta, ha_version=ha_version, loader=loader):
         return "golden"
     return "attempt"
-
-
-def record_attempt_state(directory: Path, *, ha_version: str, loader: str) -> None:
-    write_json(
-        directory / ATTEMPT_STATE,
-        {
-            "last_attempt_ha_version": ha_version,
-            "last_attempt_loader": loader,
-        },
-    )
 
 
 def write_boot_session(
