@@ -21,9 +21,9 @@ World switch/create, backups, restore, status. Home Assistant Ingress — no ext
 
 Open `http://<home-assistant-host>:8765/`, sign in with the publisher password. The page is a file drop, not a media site: the player, search, zip, and other Copyparty extras are turned off.
 
-This site **is** the live `mods/` folder for the current world (not an inbox plus a `/mods/` view). Drop a JAR to add or replace a mod (same mod id replaces the last build even if the filename is different). The jar must match this world’s **Minecraft version** and **loader** (1.21.1 NeoForge here, not 1.21.11). Do not upload NeoForge/Fabric installer jars; those are the world type, not a mod.
+This site is the **upload** folder (`uploaded_mods/`), not the running server’s `mods/` snapshot. Drop a JAR to add or replace a mod (same mod id replaces the last build even if the filename is different). The jar must match this world’s **Minecraft version** and **loader** (1.21.1 NeoForge here, not 1.21.11). Do not upload NeoForge/Fabric installer jars; those are the world type, not a mod.
 
-Delete a jar on the same page to take it off the server (not AutoModpack / Fabric API). If nobody is connected, the game restarts after a short pause so several jars can land together. If anyone is playing, it waits until the last player leaves, then restarts. Relaunch Minecraft if AutoModpack asks. If a bad jar already crashed the game, delete it here. The upload page stays up even when Minecraft will not start (this add-on has no Home Assistant watchdog).
+Minecraft keeps the last launch snapshot until it restarts (empty-server restart still applies the new set). Delete a jar on the same page to take it off next boot (not AutoModpack / Fabric API). If nobody is connected, the game restarts after a short pause so several jars can land together. If anyone is playing, it waits until the last player leaves, then restarts. Relaunch Minecraft if AutoModpack asks. If a bad jar already crashed the game, delete it here. The upload page stays up even when Minecraft will not start (this add-on has no Home Assistant watchdog).
 
 Do not upload AutoModpack or Fabric API — those are protected.
 

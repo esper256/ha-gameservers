@@ -74,7 +74,7 @@ hold_on_crash_loop: true
 restart_when_empty: true
 copyparty:
   port: 8765
-  root: "{data_dir}/{world_name}/mods"
+  root: "{data_dir}/{world_name}/uploaded_mods"
   password_option: publisher_password
   before_upload:
     - python3

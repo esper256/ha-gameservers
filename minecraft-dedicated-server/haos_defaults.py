@@ -5,14 +5,17 @@ Kept out of game-server-base so Fabric/NeoForge names stay in this folder.
 
 from __future__ import annotations
 
+import errno
+import fcntl
 import json
 import os
 import re
 import shutil
 import subprocess
 import sys
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 from urllib.request import Request, urlopen
 
 HELPER = Path("/opt/mc-image-helper/bin/mc-image-helper")
@@ -29,6 +32,11 @@ PROTECTED_MOD_IDS = frozenset(
         "forge",
     }
 )
+SEALED_MODE = 0o444
+UPLOADED_MODS = "uploaded_mods"
+MODS_SNAPSHOT = "mods"
+MODS_NEXT = "mods.next"
+MODS_PREV = "mods.prev"
 
 
 def options() -> dict[str, Any]:
@@ -90,6 +98,156 @@ def active_world_name() -> str:
 
 def profile_dir(name: str | None = None) -> Path:
     return worlds_dir() / (name or active_world_name())
+
+
+def uploaded_mods_dir(directory: Path | None = None) -> Path:
+    return (directory or profile_dir()) / UPLOADED_MODS
+
+
+def mods_snapshot_dir(directory: Path | None = None) -> Path:
+    return (directory or profile_dir()) / MODS_SNAPSHOT
+
+
+@contextmanager
+def publish_lock() -> Iterator[Any]:
+    """Exclusive lock shared by publish, Copyparty hooks, and snapshot staging."""
+
+    path = publisher_root() / "publish.lock"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    handle = path.open("a+")
+    try:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        yield handle
+    finally:
+        handle.close()
+
+
+def _is_partial_name(name: str) -> bool:
+    lower = name.lower()
+    return lower.endswith(".partial")
+
+
+def sealed_jars(folder: Path) -> list[Path]:
+    if not folder.is_dir():
+        return []
+    out: list[Path] = []
+    for path in folder.iterdir():
+        if not path.is_file():
+            continue
+        name = path.name
+        if name.startswith(".") or _is_partial_name(name):
+            continue
+        if name.lower().endswith(".jar"):
+            out.append(path)
+    return out
+
+
+def install_atomic(src: Path, dest: Path) -> None:
+    """Seal dest as a new inode (never truncate an existing sealed jar)."""
+
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_name(dest.name + ".new")
+    if tmp.exists():
+        tmp.unlink()
+    shutil.copy2(src, tmp)
+    os.replace(tmp, dest)
+    os.chmod(dest, SEALED_MODE)
+
+
+# linux/fs.h FICLONE: _IOW(0x94, 9, int) — CoW clone; new inode, shared extents.
+_FICLONE = 0x40049409
+
+
+def _try_reflink(src: Path, dest: Path) -> bool:
+    """Clone extents when the FS supports it (btrfs/xfs). False if unsupported."""
+
+    src_fd = os.open(src, os.O_RDONLY)
+    try:
+        dest_fd = os.open(dest, os.O_WRONLY | os.O_CREAT | os.O_EXCL, SEALED_MODE)
+        try:
+            fcntl.ioctl(dest_fd, _FICLONE, src_fd)
+        except OSError:
+            os.close(dest_fd)
+            dest.unlink(missing_ok=True)
+            return False
+        os.close(dest_fd)
+        return True
+    finally:
+        os.close(src_fd)
+
+
+def clone_sealed_jar(src: Path, dest: Path) -> None:
+    """Stage one jar: reflink (isolates later in-place writes), else hardlink, else copy.
+
+    Reflink is a new inode that shares disk until someone writes; that is the
+    only clone that still protects the JVM if Copyparty truncates the upload
+    name. Hardlinks share the inode (need the no-in-place-write rule). Copies
+    isolate always but use extra space. ext4 HA volumes skip FICLONE and use
+    the hardlink path.
+    """
+
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if dest.exists():
+        dest.unlink()
+    if _try_reflink(src, dest):
+        return
+    try:
+        os.link(src, dest)
+        return
+    except OSError as exc:
+        if exc.errno not in {errno.EXDEV, errno.EPERM, getattr(errno, "ENOTSUP", errno.EPERM)}:
+            raise
+        shutil.copy2(src, dest)
+    try:
+        os.chmod(dest, SEALED_MODE)
+    except OSError:
+        pass
+
+
+def migrate_legacy_mods(directory: Path) -> None:
+    """Move jars from a pre-snapshot mods/ tree into uploaded_mods/ once."""
+
+    uploaded = uploaded_mods_dir(directory)
+    mods = mods_snapshot_dir(directory)
+    uploaded.mkdir(parents=True, exist_ok=True)
+    if sealed_jars(uploaded):
+        return
+    if not mods.is_dir():
+        return
+    for jar in sealed_jars(mods):
+        dest = uploaded / jar.name
+        if dest.exists():
+            continue
+        try:
+            os.replace(jar, dest)
+        except OSError:
+            shutil.copy2(jar, dest)
+            jar.unlink(missing_ok=True)
+        try:
+            os.chmod(dest, SEALED_MODE)
+        except OSError:
+            pass
+
+
+def stage_mod_snapshot(directory: Path | None = None) -> None:
+    """Rebuild world/mods (reflink, else hardlink, else copy); keep mods.prev."""
+
+    directory = directory or profile_dir()
+    uploaded = uploaded_mods_dir(directory)
+    mods = mods_snapshot_dir(directory)
+    nxt = directory / MODS_NEXT
+    prev = directory / MODS_PREV
+    uploaded.mkdir(parents=True, exist_ok=True)
+    if nxt.exists():
+        shutil.rmtree(nxt, ignore_errors=True)
+    nxt.mkdir(parents=True)
+    for jar in sealed_jars(uploaded):
+        clone_sealed_jar(jar, nxt / jar.name)
+    if prev.exists():
+        shutil.rmtree(prev, ignore_errors=True)
+    if mods.exists():
+        os.replace(mods, prev)
+    os.replace(nxt, mods)
 
 
 def read_profile(directory: Path) -> dict[str, Any]:
@@ -231,9 +389,10 @@ def cmd_prepare_world() -> int:
             "minecraft_version": version,
         },
     )
-    (directory / "mods").mkdir(parents=True, exist_ok=True)
     (directory / "world").mkdir(parents=True, exist_ok=True)
     (directory / "config").mkdir(parents=True, exist_ok=True)
+    migrate_legacy_mods(directory)
+    uploaded_mods_dir(directory).mkdir(parents=True, exist_ok=True)
     eula = env_or_option("eula", "true").lower() in {"1", "true", "yes", "on"}
     (directory / "eula.txt").write_text(
         f"eula={'true' if eula else 'false'}\n", encoding="utf-8"
@@ -242,6 +401,8 @@ def cmd_prepare_world() -> int:
     _link_install(directory, loader, version)
     _seed_infrastructure(directory, loader, version)
     cmd_write_copyparty_banner()
+    with publish_lock():
+        stage_mod_snapshot(directory)
     return 0
 
 
@@ -326,9 +487,19 @@ def _download(url: str, dest: Path) -> None:
         shutil.copyfileobj(resp, out)
 
 
+def _seed_jar(url: str, dest: Path) -> None:
+    tmp = dest.with_name(dest.name + ".new")
+    if tmp.exists():
+        tmp.unlink()
+    _download(url, tmp)
+    os.replace(tmp, dest)
+    os.chmod(dest, SEALED_MODE)
+
+
 def _seed_infrastructure(directory: Path, loader: str, version: str) -> None:
-    mods = directory / "mods"
-    if any(mods.glob("automodpack*.jar")):
+    uploaded = uploaded_mods_dir(directory)
+    uploaded.mkdir(parents=True, exist_ok=True)
+    if any(uploaded.glob("automodpack*.jar")):
         return
     try:
         releases = _github_json(
@@ -346,11 +517,11 @@ def _seed_infrastructure(directory: Path, loader: str, version: str) -> None:
                 if url:
                     break
         if url:
-            _download(str(url), mods / "automodpack.jar")
+            _seed_jar(str(url), uploaded / "automodpack.jar")
             print(f"Seeded AutoModpack from {url}", flush=True)
     except (OSError, json.JSONDecodeError, TimeoutError) as exc:
         print(f"Could not seed AutoModpack: {exc}", file=sys.stderr)
-    if loader == "fabric" and not any(mods.glob("fabric-api*.jar")):
+    if loader == "fabric" and not any(uploaded.glob("fabric-api*.jar")):
         try:
             query = (
                 "https://api.modrinth.com/v2/project/P7dR8mSH/version"
@@ -360,7 +531,7 @@ def _seed_infrastructure(directory: Path, loader: str, version: str) -> None:
             if isinstance(data, list) and data:
                 files = data[0].get("files") or []
                 if files:
-                    _download(str(files[0]["url"]), mods / "fabric-api.jar")
+                    _seed_jar(str(files[0]["url"]), uploaded / "fabric-api.jar")
         except (OSError, json.JSONDecodeError, TimeoutError, KeyError) as exc:
             print(f"Could not seed Fabric API: {exc}", file=sys.stderr)
 
@@ -379,6 +550,8 @@ def cmd_run() -> int:
     install = install_dir() / f"{loader}-{version}"
     _link_install(directory, loader, version)
     _ensure_rcon_properties(directory)
+    with publish_lock():
+        stage_mod_snapshot(directory)
     java_opts = env_or_option("java_opts", "-Xms2G -Xmx4G")
     os.chdir(directory)
     cmd = ["java", *java_opts.split()]
@@ -708,26 +881,27 @@ def fabric_launcher_jar(install: Path, directory: Path) -> Path | None:
 
 
 def cmd_write_copyparty_banner() -> int:
-    """Kid-facing HTML on the live mods folder (Copyparty has no dots perm)."""
+    """Kid-facing HTML on the upload folder (Copyparty has no dots perm)."""
 
-    mods = profile_dir() / "mods"
-    mods.mkdir(parents=True, exist_ok=True)
-    _sweep_drop_junk(mods)
-    (mods / ".prologue.html").write_text(
+    uploaded = uploaded_mods_dir()
+    uploaded.mkdir(parents=True, exist_ok=True)
+    _sweep_drop_junk(uploaded)
+    (uploaded / ".prologue.html").write_text(
         """\
 <div style="max-width:42rem;margin:1rem 0 1.25rem;padding:1rem 1.15rem;\
 background:#241c12;color:#f2e6c9;border-left:4px solid #5aad32;\
 font-family:sans-serif;line-height:1.45">
   <strong>Family Minecraft mods</strong>
-  <p style="margin:0.6rem 0 0">This folder <em>is</em> the live mod list.
-  Drop a <code>.jar</code> here to add or replace a mod (same mod id
-  replaces the last build even if the filename is different). Delete a
-  jar to take it off (not AutoModpack). Use a build for this world&rsquo;s
-  Minecraft version and loader (1.21.1 NeoForge unless you created a
-  Fabric world).</p>
-  <p style="margin:0.6rem 0 0">If anyone is playing, the server waits
-  until the last player leaves, then restarts. Then relaunch Minecraft
-  if AutoModpack asks.</p>
+  <p style="margin:0.6rem 0 0">This is the <em>upload</em> folder, not the
+  running server&rsquo;s copy. Drop a <code>.jar</code> to add or replace
+  a mod (same mod id replaces the last build even if the filename is
+  different). Delete a jar to take it off next restart (not AutoModpack).
+  Use a build for this world&rsquo;s Minecraft version and loader
+  (1.21.1 NeoForge unless you created a Fabric world).</p>
+  <p style="margin:0.6rem 0 0">The game keeps the last launch snapshot
+  until it restarts. If anyone is playing, it waits until the last
+  player leaves, then restarts. Then relaunch Minecraft if AutoModpack
+  asks.</p>
 </div>
 """,
         encoding="utf-8",

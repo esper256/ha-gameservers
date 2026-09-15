@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import sys
 import tempfile
 import unittest
@@ -61,7 +62,9 @@ class MinecraftPluginTests(unittest.TestCase):
         self.assertTrue(plugin.restart_when_empty)
         assert plugin.copyparty is not None
         self.assertEqual(plugin.copyparty.port, 8765)
-        self.assertEqual(plugin.copyparty.root, "{data_dir}/{world_name}/mods")
+        self.assertEqual(
+            plugin.copyparty.root, "{data_dir}/{world_name}/uploaded_mods"
+        )
         self.assertIn("--guard-upload", plugin.copyparty.before_upload)
         assert plugin.status_probe is not None
         self.assertIn("status-probe", plugin.status_probe.argv)
@@ -126,7 +129,7 @@ class PublishModTests(unittest.TestCase):
             _jar(first, fabric=True)
             _jar(second, fabric=True)
             self.assertEqual(publish_mod.publish(first), 0)
-            dest = worlds / "mods" / "cool_creepers.jar"
+            dest = worlds / "uploaded_mods" / "cool_creepers.jar"
             self.assertTrue(dest.is_file())
             self.assertFalse(first.exists())
             self.assertEqual(publish_mod.publish(second), 0)
@@ -157,7 +160,7 @@ class PublishModTests(unittest.TestCase):
             _jar(jar, fabric=False, mod_id="jade")
             _jar(partial, fabric=False, mod_id="jade")
             self.assertEqual(publish_mod.publish_paths([partial, jar]), 0)
-            dest = worlds / "mods" / "jade.jar"
+            dest = worlds / "uploaded_mods" / "jade.jar"
             self.assertTrue(dest.is_file())
             self.assertFalse(jar.exists())
             self.assertTrue(partial.is_file())
@@ -210,7 +213,7 @@ class PublishModTests(unittest.TestCase):
             self.assertTrue(
                 (publisher / "quarantine" / "Jade-1.21.11-NeoForge-21.1.7.jar").is_file()
             )
-            self.assertFalse((worlds / "mods" / "jade.jar").exists())
+            self.assertFalse((worlds / "uploaded_mods" / "jade.jar").exists())
 
     def test_copyparty_config_uses_upload_hook(self) -> None:
         from game_server.copyparty import CopypartyPublisher
@@ -220,7 +223,7 @@ class PublishModTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             data = root / "worlds"
-            (data / "FamilyWorld" / "mods").mkdir(parents=True)
+            (data / "FamilyWorld" / "uploaded_mods").mkdir(parents=True)
             os.environ["DATA_DIR"] = str(data)
             publisher = CopypartyPublisher(
                 plugin.copyparty,
@@ -249,7 +252,7 @@ class PublishModTests(unittest.TestCase):
             )
             self.assertIn("publish_mod.py", hook)
 
-    def test_copyparty_banner_on_live_mods(self) -> None:
+    def test_copyparty_banner_on_upload_folder(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             worlds = root / "worlds" / "FamilyWorld"
@@ -259,7 +262,9 @@ class PublishModTests(unittest.TestCase):
             Path(os.environ["STATE_DIR"]).mkdir(exist_ok=True)
             try:
                 self.assertEqual(haos_defaults.cmd_write_copyparty_banner(), 0)
-                self.assertTrue((worlds / "mods" / ".prologue.html").is_file())
+                self.assertTrue(
+                    (worlds / "uploaded_mods" / ".prologue.html").is_file()
+                )
             finally:
                 os.environ.pop("DATA_DIR", None)
                 os.environ.pop("STATE_DIR", None)
@@ -267,17 +272,59 @@ class PublishModTests(unittest.TestCase):
     def test_guard_delete_protects_automodpack(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            mods = root / "worlds" / "FamilyWorld" / "mods"
-            mods.mkdir(parents=True)
-            protected = mods / "automodpack.jar"
+            uploaded = root / "worlds" / "FamilyWorld" / "uploaded_mods"
+            uploaded.mkdir(parents=True)
+            protected = uploaded / "automodpack.jar"
             _jar(protected, fabric=False, mod_id="automodpack")
-            kid = mods / "cool_creepers.jar"
+            kid = uploaded / "cool_creepers.jar"
             _jar(kid, fabric=True)
             os.environ["DATA_DIR"] = str(root / "worlds")
             os.environ["STATE_DIR"] = str(root / "state")
             Path(os.environ["STATE_DIR"]).mkdir(exist_ok=True)
             self.assertEqual(publish_mod.guard_delete(protected), 2)
             self.assertEqual(publish_mod.guard_delete(kid), 0)
+            self.assertEqual(publish_mod.guard_upload(kid), 2)
+            fresh = uploaded / "cool-creepers-2.jar"
+            self.assertEqual(publish_mod.guard_upload(fresh), 0)
+
+    def test_atomic_replace_uses_new_inode(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            dest = root / "cool_creepers.jar"
+            dest.write_bytes(b"old-jar-bytes")
+            in_place_ino = dest.stat().st_ino
+            other = root / "other.jar"
+            other.write_bytes(b"copy2-payload")
+            shutil.copy2(other, dest)
+            self.assertEqual(dest.stat().st_ino, in_place_ino)
+            incoming = root / "incoming.jar"
+            incoming.write_bytes(b"new-jar-bytes-xxxx")
+            haos_defaults.install_atomic(incoming, dest)
+            self.assertNotEqual(dest.stat().st_ino, in_place_ino)
+            self.assertEqual(dest.read_bytes(), b"new-jar-bytes-xxxx")
+            self.assertEqual(dest.stat().st_mode & 0o777, 0o444)
+
+    def test_stage_snapshot_survives_unlink(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            world = Path(tmp) / "FamilyWorld"
+            uploaded = world / "uploaded_mods"
+            uploaded.mkdir(parents=True)
+            src = uploaded / "cool_creepers.jar"
+            src.write_bytes(b"sealed-payload")
+            os.chmod(src, 0o444)
+            haos_defaults.stage_mod_snapshot(world)
+            staged = world / "mods" / "cool_creepers.jar"
+            self.assertTrue(staged.is_file())
+            self.assertEqual(staged.read_bytes(), b"sealed-payload")
+            src.unlink()
+            self.assertEqual(staged.read_bytes(), b"sealed-payload")
+            uploaded.joinpath("cool_creepers.jar").write_bytes(b"next-generation")
+            os.chmod(uploaded / "cool_creepers.jar", 0o444)
+            haos_defaults.stage_mod_snapshot(world)
+            prev = world / "mods.prev" / "cool_creepers.jar"
+            self.assertTrue(prev.is_file())
+            self.assertEqual(prev.read_bytes(), b"sealed-payload")
+            self.assertEqual(staged.read_bytes(), b"next-generation")
 
 
 class LaunchLinkTests(unittest.TestCase):
