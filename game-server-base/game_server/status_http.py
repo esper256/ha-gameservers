@@ -438,6 +438,14 @@ HTML_PAGE = """<!DOCTYPE html>
       font: inherit;
       min-width: min(100%, 28rem);
     }}
+    input[type=text] {{
+      background: rgba(0,0,0,0.28);
+      color: var(--ink);
+      border: 1px solid color-mix(in srgb, var(--muted) 35%, transparent);
+      padding: 0.45rem 0.6rem;
+      font: inherit;
+      min-width: min(100%, 16rem);
+    }}
     details.trouble {{
       margin-top: 1.5rem;
       color: var(--ink);
@@ -618,9 +626,35 @@ HTML_PAGE = """<!DOCTYPE html>
       </div>
     </div>
 
+    <h2>Worlds</h2>
+    <p class="sub">
+      Switching or creating a world stops the game server and starts it on the selected save. Anyone online is disconnected. The app itself stays running.
+    </p>
+    <div class="restore-block">
+      <div class="section-label">Active world</div>
+      <div class="capture-row capture-row-stack">
+        <label class="hidden" for="world-select">World</label>
+        <select id="world-select">{world_options}</select>
+        <button type="button" class="btn btn-primary" id="btn-world-switch" onclick="return switchWorld(event)">
+          Switch
+        </button>
+      </div>
+    </div>
+    <div class="restore-block">
+      <div class="section-label">New world</div>
+      <div class="capture-row capture-row-stack">
+        <label class="hidden" for="world-create-name">Name</label>
+        <input type="text" id="world-create-name" placeholder="World name" autocomplete="off" />
+        <span id="world-create-fields">{world_create_fields}</span>
+        <button type="button" class="btn btn-caution" id="btn-world-create" onclick="return createWorld(event)">
+          Create
+        </button>
+      </div>
+    </div>
+
     <h2>World backups</h2>
     <p class="sub">
-      Restoring stops the server, makes a world backup, then restores onto the active world shown above. Anyone online is disconnected. Switch world slot/name before restoring a backup from another world.
+      Restoring stops the server, makes a world backup, then restores onto the active world shown above. Anyone online is disconnected. Switch worlds above before restoring a backup from another world.
     </p>
     <div class="restore-block">
       <div class="section-label">Restore from backup</div>
@@ -814,6 +848,79 @@ HTML_PAGE = """<!DOCTYPE html>
         }}
       }} catch (e) {{
         alert('Could not schedule world upload.');
+      }} finally {{
+        if (btn) btn.disabled = false;
+      }}
+      return false;
+    }}
+    async function switchWorld(ev) {{
+      ev.preventDefault();
+      const sel = document.getElementById('world-select');
+      const name = sel ? sel.value : '';
+      if (!name) {{
+        alert('Choose a world');
+        return false;
+      }}
+      const ok = window.confirm(
+        'Switch to world ' + name + '?\\n\\n' +
+        'The game server will restart. Anyone playing will be disconnected.'
+      );
+      if (!ok) return false;
+      const btn = document.getElementById('btn-world-switch');
+      if (btn) btn.disabled = true;
+      try {{
+        const res = await fetch('api/worlds/switch', {{
+          method: 'POST',
+          headers: {{ 'Content-Type': 'application/json' }},
+          body: JSON.stringify({{ name: name }}),
+        }});
+        const data = await res.json();
+        if (data.ok) {{
+          softRefresh();
+        }} else {{
+          alert(data.error || 'Could not switch world.');
+        }}
+      }} catch (e) {{
+        alert('Could not switch world.');
+      }} finally {{
+        if (btn) btn.disabled = false;
+      }}
+      return false;
+    }}
+    async function createWorld(ev) {{
+      ev.preventDefault();
+      const nameEl = document.getElementById('world-create-name');
+      const name = nameEl ? nameEl.value.trim() : '';
+      if (!name) {{
+        alert('Enter a world name');
+        return false;
+      }}
+      const fields = {{}};
+      document.querySelectorAll('[data-world-create-field]').forEach((el) => {{
+        const key = el.getAttribute('data-world-create-field');
+        if (key) fields[key] = el.value;
+      }});
+      const ok = window.confirm(
+        'Create world ' + name + '?\\n\\n' +
+        'The game server will restart. Anyone playing will be disconnected.'
+      );
+      if (!ok) return false;
+      const btn = document.getElementById('btn-world-create');
+      if (btn) btn.disabled = true;
+      try {{
+        const res = await fetch('api/worlds/create', {{
+          method: 'POST',
+          headers: {{ 'Content-Type': 'application/json' }},
+          body: JSON.stringify({{ name: name, fields: fields }}),
+        }});
+        const data = await res.json();
+        if (data.ok) {{
+          softRefresh();
+        }} else {{
+          alert(data.error || 'Could not create world.');
+        }}
+      }} catch (e) {{
+        alert('Could not create world.');
       }} finally {{
         if (btn) btn.disabled = false;
       }}
@@ -1019,6 +1126,16 @@ HTML_PAGE = """<!DOCTYPE html>
           bsel.innerHTML = u.backup_options;
           if (prev) bsel.value = prev;
         }}
+        const wsel = document.getElementById('world-select');
+        if (wsel && u.world_options) {{
+          const prev = wsel.value;
+          wsel.innerHTML = u.world_options;
+          if (prev) wsel.value = prev;
+        }}
+        const wfields = document.getElementById('world-create-fields');
+        if (wfields && u.world_create_fields != null) {{
+          wfields.innerHTML = u.world_create_fields;
+        }}
       }} catch (e) {{
         setLiveStatus(false, 'Live status refresh failed. This app looks stopped or unresponsive; the cards on this page may be stale.');
       }} finally {{
@@ -1050,6 +1167,9 @@ class StatusServer:
         upload_callback: Callable[[Path], dict[str, Any]] | None = None,
         upload_staging_dir: str | Path | None = None,
         world_download_callback: Callable[[], dict[str, Any] | None] | None = None,
+        restart_callback: Callable[..., dict[str, Any]] | None = None,
+        world_switch_callback: Callable[[str], dict[str, Any]] | None = None,
+        world_create_callback: Callable[..., dict[str, Any]] | None = None,
     ) -> None:
         self.host = host
         self.port = port
@@ -1064,6 +1184,9 @@ class StatusServer:
         self.upload_callback = upload_callback
         self.upload_staging_dir = Path(upload_staging_dir) if upload_staging_dir else None
         self.world_download_callback = world_download_callback
+        self.restart_callback = restart_callback
+        self.world_switch_callback = world_switch_callback
+        self.world_create_callback = world_create_callback
         self._httpd: ThreadingHTTPServer | None = None
         self._thread: threading.Thread | None = None
 
@@ -1079,6 +1202,9 @@ class StatusServer:
         upload_cb = self.upload_callback
         upload_dir = self.upload_staging_dir
         world_dl_cb = self.world_download_callback
+        restart_cb = self.restart_callback
+        world_switch_cb = self.world_switch_callback
+        world_create_cb = self.world_create_callback
 
         class Handler(BaseHTTPRequestHandler):
             def log_message(self, fmt: str, *args: Any) -> None:  # noqa: A003
@@ -1142,10 +1268,16 @@ class StatusServer:
                     shutil.copyfileobj(fh, self.wfile, length=1024 * 1024)
 
             def do_POST(self) -> None:  # noqa: N802
-                if not self._peer_allowed():
-                    self._send(403, b"forbidden\n", "text/plain; charset=utf-8")
-                    return
                 path = urlparse(self.path).path
+                peer = canonical_peer(self.client_address[0])
+                if not self._peer_allowed():
+                    if not (
+                        path == "/api/restart"
+                        and peer == "127.0.0.1"
+                        and restart_cb is not None
+                    ):
+                        self._send(403, b"forbidden\n", "text/plain; charset=utf-8")
+                        return
                 if path == "/api/logs/capture":
                     if capture_cb is None:
                         self._json(501, {"error": "log capture unavailable"})
@@ -1157,6 +1289,51 @@ class StatusServer:
                         self._json(501, {"ok": False, "error": "manual update unavailable"})
                         return
                     result = update_cb()
+                    self._json(200 if result.get("ok") else 409, result)
+                    return
+                if path == "/api/restart":
+                    if restart_cb is None:
+                        self._json(501, {"ok": False, "error": "restart unavailable"})
+                        return
+                    try:
+                        payload = _parse_json_object(_read_http_body(self))
+                    except ValueError:
+                        payload = {}
+                    debounce = payload.get("debounce_seconds") or 0
+                    reason = str(payload.get("reason") or "manual")
+                    try:
+                        debounce_f = float(debounce)
+                    except (TypeError, ValueError):
+                        debounce_f = 0.0
+                    result = restart_cb(reason, debounce_seconds=debounce_f)
+                    self._json(200 if result.get("ok") else 409, result)
+                    return
+                if path == "/api/worlds/switch":
+                    if world_switch_cb is None:
+                        self._json(501, {"ok": False, "error": "world switch unavailable"})
+                        return
+                    try:
+                        payload = _parse_json_object(_read_http_body(self))
+                    except ValueError as exc:
+                        self._json(400, {"ok": False, "error": str(exc)})
+                        return
+                    name = str(payload.get("name") or payload.get("world") or "").strip()
+                    result = world_switch_cb(name)
+                    self._json(200 if result.get("ok") else 409, result)
+                    return
+                if path == "/api/worlds/create":
+                    if world_create_cb is None:
+                        self._json(501, {"ok": False, "error": "world create unavailable"})
+                        return
+                    try:
+                        payload = _parse_json_object(_read_http_body(self))
+                    except ValueError as exc:
+                        self._json(400, {"ok": False, "error": str(exc)})
+                        return
+                    name = str(payload.get("name") or payload.get("world") or "").strip()
+                    fields = payload.get("fields")
+                    extra = fields if isinstance(fields, dict) else {}
+                    result = world_create_cb(name, extra)
                     self._json(200 if result.get("ok") else 409, result)
                     return
                 if path == "/api/world/upload":
@@ -1722,6 +1899,87 @@ def _format_backup_options(status: dict[str, Any]) -> str:
     return "\n".join(options)
 
 
+def _format_world_options(status: dict[str, Any]) -> str:
+    worlds = status.get("worlds") or {}
+    catalog = worlds.get("catalog") or []
+    active = str(worlds.get("active") or "").strip()
+    options: list[str] = []
+    seen: set[str] = set()
+    if isinstance(catalog, list):
+        for item in catalog:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name") or "").strip()
+            if not name or name in seen:
+                continue
+            seen.add(name)
+            caption = str(item.get("caption") or "").strip()
+            label = f"{name} ({caption})" if caption else name
+            if name == active:
+                label = f"{label} (active)"
+            selected = " selected" if name == active else ""
+            options.append(
+                f'<option value="{_html_escape(name)}"{selected}>'
+                f"{_html_escape(label)}</option>"
+            )
+    if active and active not in seen:
+        options.insert(
+            0,
+            f'<option value="{_html_escape(active)}" selected>'
+            f"{_html_escape(active)} (active)</option>",
+        )
+    if not options:
+        options.append('<option value="">No worlds yet</option>')
+    return "\n".join(options)
+
+
+def _format_world_create_fields(status: dict[str, Any]) -> str:
+    worlds = status.get("worlds") or {}
+    fields = worlds.get("create_fields") or []
+    chunks: list[str] = []
+    if not isinstance(fields, list):
+        return ""
+    for item in fields:
+        if not isinstance(item, dict):
+            continue
+        field_id = str(item.get("id") or "").strip()
+        if not field_id:
+            continue
+        kind = str(item.get("kind") or "text").strip().lower()
+        label = str(item.get("label") or field_id)
+        default = str(item.get("default") or "")
+        attr = f'data-world-create-field="{_html_escape(field_id)}"'
+        if kind == "select":
+            opts = []
+            raw_opts = item.get("options") or []
+            if isinstance(raw_opts, list):
+                for opt in raw_opts:
+                    if isinstance(opt, dict):
+                        value = str(opt.get("value") or "").strip()
+                        opt_label = str(opt.get("label") or value)
+                    else:
+                        value = str(opt).strip()
+                        opt_label = value
+                    if not value:
+                        continue
+                    selected = " selected" if value == default else ""
+                    opts.append(
+                        f'<option value="{_html_escape(value)}"{selected}>'
+                        f"{_html_escape(opt_label)}</option>"
+                    )
+            chunks.append(
+                f'<label class="world-create-field">{_html_escape(label)} '
+                f"<select {attr}>{''.join(opts)}</select></label>"
+            )
+        else:
+            chunks.append(
+                f'<label class="world-create-field">{_html_escape(label)} '
+                f'<input type="text" {attr} value="{_html_escape(default)}" />'
+                f"</label>"
+            )
+    return "\n".join(chunks)
+
+
 def _format_world_save(status: dict[str, Any]) -> tuple[str, str]:
     """Return (size value, hint HTML). Hint may be a download link."""
 
@@ -1958,6 +2216,8 @@ def _ui_view(
         "crashes_hint": _format_crashes_hint(status),
         "world_save": world_save,
         "world_save_hint": world_save_hint,
+        "world_options": _format_world_options(status),
+        "world_create_fields": _format_world_create_fields(status),
         "world_upload_hint": world_upload_hint,
         "world_upload_accept": world_upload_accept,
         "world_upload_class": world_upload_class,
@@ -2018,6 +2278,8 @@ _STATUS_HTML_KEYS = (
     "crashes_hint",
     "world_save",
     "world_save_hint",
+    "world_options",
+    "world_create_fields",
     "world_upload_hint",
     "world_upload_accept",
     "world_upload_class",
@@ -2081,6 +2343,8 @@ def render_status_html(view: dict[str, Any], *, base_href: str = "/") -> str:
         world_save=_html_escape(view["world_save"]),
         # Hint may include a download <a>; _format_world_save already escapes text.
         world_save_hint=view["world_save_hint"],
+        world_options=view.get("world_options") or "",
+        world_create_fields=view.get("world_create_fields") or "",
         world_upload_hint=_html_escape(view.get("world_upload_hint") or ""),
         world_upload_accept=_html_escape(view.get("world_upload_accept") or ""),
         world_upload_class=_html_escape(view.get("world_upload_class") or ""),

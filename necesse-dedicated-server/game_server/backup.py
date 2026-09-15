@@ -234,12 +234,18 @@ class BackupManager:
         self.consecutive_failures = 0
         self.next_eligible_at: float = 0.0
         self._on_failure: Callable[[str], None] | None = None
+        self._pre_backup: Callable[[], None] | None = None
         self._lock = threading.Lock()
 
     def set_failure_callback(self, callback: Callable[[str], None] | None) -> None:
         """Optional hook for HA notifications / status when backups fail."""
 
         self._on_failure = callback
+
+    def set_pre_backup_callback(self, callback: Callable[[], None] | None) -> None:
+        """Optional hook to flush game saves (stdin) before copying files."""
+
+        self._pre_backup = callback
 
     def start(self) -> None:
         if not self.enabled or self.interval_seconds <= 0:
@@ -488,6 +494,11 @@ class BackupManager:
             return BackupResult(BACKUP_SKIPPED, reason="backups disabled")
         self.last_skip_reason = None
         self.backup_dir.mkdir(parents=True, exist_ok=True)
+        if self._pre_backup is not None and reason == "schedule":
+            try:
+                self._pre_backup()
+            except Exception:
+                LOG.exception("Pre-backup flush failed; continuing with copy")
 
         ok, available = ensure_free_mb(self.backup_dir, self.min_free_disk_mb)
         if not ok:

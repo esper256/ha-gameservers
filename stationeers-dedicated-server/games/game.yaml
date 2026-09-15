@@ -15,6 +15,8 @@ stop_timeout_seconds: 90
 stop_stdin_commands:
   - save
   - quit
+pre_backup_stdin_commands:
+  - save
 # Fallback roots when no named world exists yet; also used to restore legacy
 # *.tar.gz snapshots. New backups zip the active save folder.
 backup_paths:
@@ -24,6 +26,9 @@ world_save:
   strategy: named_path
   paths:
     - "{data_dir}/saves/{world_name}"
+world_catalog:
+  glob: "{data_dir}/saves/*"
+  name_from: directory
 executable:
   - ./rocketstation_DedicatedServer.x86_64
 # Steamworks client app id (game), not the dedicated-server app id.

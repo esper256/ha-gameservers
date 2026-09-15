@@ -26,6 +26,9 @@ world_save:
   strategy: named_path
   paths:
     - "{data_dir}/saves/{world_name}.zip"
+world_catalog:
+  glob: "{data_dir}/saves/*.zip"
+  name_from: stem
 executable:
   - ./bin/x64/factorio
 bool_style: true_false

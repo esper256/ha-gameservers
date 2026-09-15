@@ -26,6 +26,10 @@ world_save:
   world_name_option: world_index
   paths:
     - "{data_dir}/worlds/{world_index}.world.gzip"
+world_catalog:
+  glob: "{data_dir}/worlds/*.world.gzip"
+  name_from: strip_suffix
+  suffix: ".world.gzip"
 # Wrapper sets up Xvfb, steamclient.so, and prints Game ID. Game argv follows.
 executable:
   - /opt/launch_wrapper.sh

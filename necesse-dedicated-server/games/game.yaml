@@ -14,6 +14,8 @@ stop_timeout_seconds: 240
 stop_stdin_commands:
   - save
   - exit
+pre_backup_stdin_commands:
+  - save
 # Fallback roots when no named world exists yet; also used to restore legacy
 # *.tar.gz snapshots. New backups follow world_save kind (copy the .zip as-is).
 backup_paths:
@@ -24,6 +26,9 @@ world_save:
   paths:
     - "{data_dir}/saves/worlds/{world_name}.zip"
     - "{data_dir}/saves/worlds/{world_name}"
+world_catalog:
+  glob: "{data_dir}/saves/worlds/*"
+  name_from: stem
 executable:
   - java
   - -jar
