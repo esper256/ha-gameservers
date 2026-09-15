@@ -411,10 +411,12 @@ def cmd_write_copyparty_config() -> int:
     hook.chmod(0o755)
     # Keep the config out of the incoming share so kids cannot edit it.
     # xau is after-upload and receives the filesystem path as argv[1].
+    # Copyparty refuses xau unless file indexing (e2dsa) is on.
     (root / "copyparty.conf").write_text(
         f"""\
 [global]
   p: {port}
+  e2dsa
   no-crt
   hist: {root / "cphist"}
 
@@ -426,6 +428,7 @@ def cmd_write_copyparty_config() -> int:
   accs:
     rw: kids
   flags:
+    e2dsa
     xau: {hook}
 """,
         encoding="utf-8",

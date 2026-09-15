@@ -161,6 +161,7 @@ class PublishModTests(unittest.TestCase):
             conf = (root / "copyparty.conf").read_text(encoding="utf-8")
             self.assertIn("xau:", conf)
             self.assertIn("flags:", conf)
+            self.assertIn("e2dsa", conf)
             self.assertNotIn("xbu:", conf)
             self.assertNotIn("{p}", conf)
             self.assertTrue((root / "on-upload.sh").is_file())
