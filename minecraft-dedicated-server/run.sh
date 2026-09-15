@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Supervisor owns Copyparty (kid uploads on the live mods folder).
+# Supervisor owns Copyparty (mod uploads on the live mods folder).
 set -euo pipefail
 
 VERSION="${APP_VERSION:-}"

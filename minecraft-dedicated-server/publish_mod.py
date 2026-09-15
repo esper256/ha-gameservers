@@ -17,7 +17,6 @@ from haos_defaults import (  # noqa: E402
     active_world_name,
     install_atomic,
     profile_dir,
-    publish_lock,
     read_profile,
     state_dir,
     uploaded_mods_dir,
@@ -179,11 +178,6 @@ def _request_restart() -> None:
 
 
 def publish(incoming: Path) -> int:
-    with publish_lock():
-        return _publish_locked(incoming)
-
-
-def _publish_locked(incoming: Path) -> int:
     quarantine = publisher_root() / "quarantine"
     history_root = publisher_root() / "history"
     if not incoming.is_file():
@@ -289,11 +283,6 @@ def publish_from_stdin() -> int:
 
 
 def rollback(mod_id: str) -> int:
-    with publish_lock():
-        return _rollback_locked(mod_id)
-
-
-def _rollback_locked(mod_id: str) -> int:
     if not MOD_ID_RE.fullmatch(mod_id):
         print("Invalid mod id", file=sys.stderr)
         return 2

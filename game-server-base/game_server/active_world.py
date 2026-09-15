@@ -157,6 +157,32 @@ def try_sync_ha_addon_option(option_key: str, value: str) -> bool:
     return True
 
 
+def fetch_addon_network() -> dict[str, Any] | None:
+    """Host port map from Supervisor ``GET addons/self/info``.
+
+    Keys look like ``8765/tcp``; values are the host port or ``None`` when
+    that mapping is disabled on the add-on Network tab. Returns ``None`` when
+    Supervisor is unavailable so callers can fall back to the container port.
+    """
+
+    token = os.environ.get("SUPERVISOR_TOKEN")
+    if not token:
+        return None
+    headers = {"Authorization": f"Bearer {token}"}
+    try:
+        info = _supervisor_json("GET", "http://supervisor/addons/self/info", headers)
+    except (OSError, urllib.error.URLError, TimeoutError, ValueError) as exc:
+        LOG.info("Could not read add-on Network map: %s", exc)
+        return None
+    data = info.get("data") if isinstance(info.get("data"), dict) else info
+    if not isinstance(data, dict):
+        return None
+    network = data.get("network")
+    if not isinstance(network, dict):
+        return None
+    return network
+
+
 def _supervisor_json(
     method: str,
     url: str,

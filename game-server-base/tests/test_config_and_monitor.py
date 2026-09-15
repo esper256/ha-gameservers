@@ -2561,6 +2561,18 @@ class StatusFormatTests(unittest.TestCase):
             "ExampleGame",
         )
         self.assertEqual(one["copyparty_files"], "1 file")
+        remapped = _ui_view(
+            {
+                "copyparty": {"port": 19999, "file_count": 2},
+            },
+            "ExampleGame",
+            request_host="homeassistant.local:8123",
+        )
+        self.assertEqual(remapped["copyparty_port"], "19999")
+        self.assertEqual(
+            remapped["copyparty_href"],
+            "http://homeassistant.local:19999/",
+        )
         self.assertEqual(hostname_from_host_header("[fd00::1]:8123"), "[fd00::1]")
         self.assertEqual(
             copyparty_lan_href(8765, "[fd00::1]:8123"),

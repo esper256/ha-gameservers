@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Mapping
 
+from .active_world import fetch_addon_network
 from .world_save import expand_world_path_template
 
 LOG = logging.getLogger("game_server.copyparty")
@@ -68,6 +69,39 @@ class CopypartySpec:
         )
 
 
+def copyparty_lan_port(
+    container_port: int, network: Mapping[str, Any] | None
+) -> int | None:
+    """Host port for the Ingress Uploads card.
+
+    Copyparty still binds ``container_port`` inside the add-on. Home Assistant
+    Network remaps that to a host port. ``None`` means the mapping is disabled.
+    When Supervisor did not return a map, fall back to the container port.
+    """
+
+    port = int(container_port)
+    if network is None:
+        return port
+    raw: Any = None
+    found = False
+    for key in (f"{port}/tcp", str(port)):
+        if key in network:
+            raw = network[key]
+            found = True
+            break
+    if not found:
+        return port
+    if raw is None or raw is False or raw == "":
+        return None
+    try:
+        mapped = int(raw)
+    except (TypeError, ValueError):
+        return port
+    if mapped < 1 or mapped > 65535:
+        return None
+    return mapped
+
+
 class CopypartyPublisher:
     """Write a slim Copyparty config and keep the process running."""
 
@@ -89,6 +123,7 @@ class CopypartyPublisher:
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._lock = threading.Lock()
+        self._network_cache: tuple[float, Mapping[str, Any] | None] | None = None
 
     def set_world(self, world_name: str, options: Mapping[str, Any]) -> None:
         self._world_name = world_name
@@ -148,11 +183,23 @@ class CopypartyPublisher:
 
         if self._spec is None:
             return None
+        host_port = copyparty_lan_port(self._spec.port, self._addon_network())
+        if host_port is None:
+            return None
         root = self.expanded_root()
         return {
-            "port": int(self._spec.port),
+            "port": int(host_port),
             "file_count": count_visible_files(root) if root is not None else 0,
         }
+
+    def _addon_network(self) -> Mapping[str, Any] | None:
+        now = time.monotonic()
+        cached = self._network_cache
+        if cached is not None and now - cached[0] < 30:
+            return cached[1]
+        network = fetch_addon_network()
+        self._network_cache = (now, network)
+        return network
 
     def _root_path(self) -> Path:
         path = self.expanded_root()

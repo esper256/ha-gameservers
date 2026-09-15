@@ -10,16 +10,16 @@ Accept the Minecraft EULA (the **EULA** option, default on). Mojang requires thi
 2. Leave **Update interval** at **0** so Minecraft itself stays pinned. Changing the version option later is an intentional upgrade.
 3. **Start**. First boot downloads Fabric and NeoForge for that pin (needs outbound HTTPS).
 4. **Open Web UI** → **Worlds** → create extra worlds and pick the loader there (NeoForge default).
-5. On **Network**, map the Minecraft Java port to whatever host port you want (default 25565). Keep the upload port (8765) on the LAN only (do not put it on the public internet).
+5. On **Network**, map the Minecraft Java port to whatever host port you want (default 25565). Map the upload port the same way (container 8765 → whatever host port you set; keep it on the LAN only, not the public internet).
 6. On each player PC: Prism instance with the same Minecraft version, matching loader, and AutoModpack. Join once, trust the server fingerprint, let mods sync, relaunch.
 
 ## OPEN WEB UI
 
-World switch/create, backups, restore, status. Home Assistant Ingress — no extra host port. The **Uploads** card shows how many files are in the drop folder and opens the mod-upload page on the mapped LAN port. Switching worlds restarts Minecraft only; the upload page stays up.
+World switch/create, backups, restore, status. Home Assistant Ingress — no extra host port. The **Uploads** card shows how many files are in the drop folder and opens the mod-upload page on the host port from **Network**. Switching worlds restarts Minecraft only; the upload page stays up.
 
 ## Mod uploads
 
-Open `http://<home-assistant-host>:8765/`, sign in as **mods** with the upload page password. The page is a file drop, not a media site: the player, search, zip, and other Copyparty extras are turned off.
+Open `http://<home-assistant-host>:<upload-host-port>/` (the host port on **Network** for container 8765; default 8765), sign in as **mods** with the upload page password. The page is a file drop, not a media site: the player, search, zip, and other Copyparty extras are turned off.
 
 This site is the **upload** folder (`uploaded_mods/`), not the running server’s `mods/` snapshot. Drop a JAR to add or replace a mod (same mod id replaces the last build even if the filename is different). The jar must match this world’s **Minecraft version** and **loader** (1.21.1 NeoForge here, not 1.21.11). Do not upload NeoForge/Fabric installer jars; those are the world type, not a mod.
 
@@ -38,7 +38,7 @@ Do not upload AutoModpack or Fabric API — those are protected.
 | Online mode / whitelist | Recommended on |
 | Java options | Heap; 4 GB host RAM is a practical floor |
 | Network (Minecraft Java) | Host port you mapped for the game (add-on Network settings) |
-| Network (upload page) | Default 8765, LAN only |
+| Network (upload page) | Container 8765, host port from Network, LAN only |
 
 ## Backups
 

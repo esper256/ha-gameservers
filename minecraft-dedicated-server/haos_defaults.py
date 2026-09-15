@@ -13,9 +13,8 @@ import re
 import shutil
 import subprocess
 import sys
-from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 from urllib.request import Request, urlopen
 
 HELPER = Path("/opt/mc-image-helper/bin/mc-image-helper")
@@ -106,20 +105,6 @@ def uploaded_mods_dir(directory: Path | None = None) -> Path:
 
 def mods_snapshot_dir(directory: Path | None = None) -> Path:
     return (directory or profile_dir()) / MODS_SNAPSHOT
-
-
-@contextmanager
-def publish_lock() -> Iterator[Any]:
-    """Exclusive lock shared by publish, Copyparty hooks, and snapshot staging."""
-
-    path = publisher_root() / "publish.lock"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    handle = path.open("a+")
-    try:
-        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
-        yield handle
-    finally:
-        handle.close()
 
 
 def _is_partial_name(name: str) -> bool:
@@ -242,7 +227,14 @@ def stage_mod_snapshot(directory: Path | None = None) -> None:
         shutil.rmtree(nxt, ignore_errors=True)
     nxt.mkdir(parents=True)
     for jar in sealed_jars(uploaded):
-        clone_sealed_jar(jar, nxt / jar.name)
+        try:
+            clone_sealed_jar(jar, nxt / jar.name)
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            if exc.errno == errno.ENOENT:
+                continue
+            raise
     if prev.exists():
         shutil.rmtree(prev, ignore_errors=True)
     if mods.exists():
@@ -401,8 +393,7 @@ def cmd_prepare_world() -> int:
     _link_install(directory, loader, version)
     _seed_infrastructure(directory, loader, version)
     cmd_write_copyparty_banner()
-    with publish_lock():
-        stage_mod_snapshot(directory)
+    stage_mod_snapshot(directory)
     return 0
 
 
@@ -550,8 +541,7 @@ def cmd_run() -> int:
     install = install_dir() / f"{loader}-{version}"
     _link_install(directory, loader, version)
     _ensure_rcon_properties(directory)
-    with publish_lock():
-        stage_mod_snapshot(directory)
+    stage_mod_snapshot(directory)
     java_opts = env_or_option("java_opts", "-Xms2G -Xmx4G")
     os.chdir(directory)
     cmd = ["java", *java_opts.split()]

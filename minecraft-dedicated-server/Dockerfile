@@ -75,7 +75,7 @@ WORKDIR /data/worlds
 
 LABEL \
   io.hass.name="Minecraft Dedicated Server" \
-  io.hass.description="Family Minecraft Java server with Fabric/NeoForge worlds, AutoModpack, and a kid-facing mod upload page" \
+  io.hass.description="Minecraft Java server with Fabric/NeoForge worlds, AutoModpack, and a LAN mod-upload page" \
   io.hass.type="app" \
   io.hass.version="${BUILD_VERSION}" \
   io.hass.arch="${BUILD_ARCH}" \
