@@ -72,7 +72,3 @@ def apply_status_probe(state: MonitorState, payload: Any) -> None:
             state.players_known = True
             if not count_asserted:
                 state.player_count = len(names)
-
-
-def status_probe_key_is_known(key: str) -> bool:
-    return key in _STATUS_PROBE_KEYS
