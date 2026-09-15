@@ -24,6 +24,7 @@ from game_server.plugin import load_plugin  # noqa: E402
 from game_server.world_catalog import (  # noqa: E402
     WorldCatalogSpec,
     WorldCreateSpec,
+    assert_world_path_inside,
     list_catalog_worlds,
     validate_create_fields,
     validate_world_name,
@@ -112,7 +113,14 @@ class WorldCatalogTests(unittest.TestCase):
             validate_create_fields(spec, {"nope": "x"})
         with self.assertRaises(ValueError):
             validate_world_name("bad name")
+        with self.assertRaises(ValueError):
+            validate_world_name(".")
+        with self.assertRaises(ValueError):
+            validate_world_name("..")
+        with self.assertRaises(ValueError):
+            validate_world_name("...")
         self.assertEqual(validate_world_name("Family-1"), "Family-1")
+        self.assertEqual(validate_world_name("a.b"), "a.b")
 
     def test_write_world_create_payload_directory(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -125,6 +133,16 @@ class WorldCatalogTests(unittest.TestCase):
             payload = json.loads(path.read_text(encoding="utf-8"))
             self.assertEqual(payload["flavor"], "spicy")
 
+    def test_resolved_create_path_must_stay_inside_data_dir(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            data = Path(tmp) / "worlds"
+            data.mkdir()
+            escaped = (data / "..").resolve()
+            with self.assertRaises(ValueError):
+                assert_world_path_inside(escaped, data)
+            nested = data / "FamilyWorld"
+            self.assertEqual(assert_world_path_inside(nested, data), nested.resolve())
+
     def test_example_plugin_loads_without_catalog(self) -> None:
         plugin = load_plugin(FIXTURE)
         self.assertIsNone(plugin.world_catalog)
@@ -136,8 +154,9 @@ class IngressHtmlTests(unittest.TestCase):
     def test_create_world_js_uses_field_key_variable(self) -> None:
         from game_server.status_http import HTML_PAGE
 
-        self.assertIn("fields[{{key}}] = el.value", HTML_PAGE)
-        self.assertNotIn("fields[{key}] = el.value", HTML_PAGE)
+        self.assertIn("if (key) fields[key] = el.value;", HTML_PAGE)
+        self.assertNotIn("fields[{key}]", HTML_PAGE)
+        self.assertNotIn("fields[{{key}}]", HTML_PAGE)
 
 
 class RestartSupervisorTests(unittest.TestCase):
@@ -171,6 +190,94 @@ class RestartSupervisorTests(unittest.TestCase):
             immediate = supervisor.request_restart("publish", debounce_seconds=0)
             self.assertTrue(immediate["ok"])
             self.assertEqual(supervisor._restart_not_before, 0.0)
+
+    def test_rejected_switch_does_not_persist_world(self) -> None:
+        from game_server.config import SupervisorConfig
+        from game_server.supervisor import GameServerSupervisor
+
+        plugin = load_plugin(FIXTURE)
+        with tempfile.TemporaryDirectory() as tmp:
+            state = Path(tmp) / "state"
+            cfg = SupervisorConfig(
+                install_dir=str(Path(tmp) / "game"),
+                state_dir=str(state),
+                backup_dir=str(Path(tmp) / "backups"),
+                status_http_enabled=False,
+                ha_notifications=False,
+                backup_enabled=False,
+                drop_privileges=False,
+                update_on_start=False,
+                auto_update_interval_minutes=0,
+                game_options={
+                    "world_name": "Alpha",
+                    "data_dir": str(Path(tmp) / "world"),
+                    "logs_dir": str(Path(tmp) / "logs"),
+                },
+            )
+            supervisor = GameServerSupervisor(plugin, cfg)
+            supervisor._update_pending = True
+            result = supervisor.request_world_switch("Beta")
+            self.assertFalse(result["ok"])
+            self.assertEqual(supervisor._active_world_name(), "Alpha")
+            self.assertIsNone(load_active_world(state))
+            self.assertFalse(supervisor._restart_pending)
+
+    def test_create_owns_profile_directory(self) -> None:
+        from game_server.config import SupervisorConfig
+        from game_server.supervisor import GameServerSupervisor
+
+        plugin = load_plugin(FIXTURE)
+        with tempfile.TemporaryDirectory() as tmp:
+            data = Path(tmp) / "world"
+            cfg = SupervisorConfig(
+                install_dir=str(Path(tmp) / "game"),
+                state_dir=str(Path(tmp) / "state"),
+                backup_dir=str(Path(tmp) / "backups"),
+                status_http_enabled=False,
+                ha_notifications=False,
+                backup_enabled=False,
+                drop_privileges=False,
+                update_on_start=False,
+                auto_update_interval_minutes=0,
+                game_options={
+                    "world_name": "Alpha",
+                    "data_dir": str(data),
+                    "logs_dir": str(Path(tmp) / "logs"),
+                },
+            )
+            supervisor = GameServerSupervisor(plugin, cfg)
+            result = supervisor.request_world_create("Beta")
+            self.assertTrue(result["ok"])
+            self.assertEqual(supervisor._active_world_name(), "Beta")
+            self.assertTrue((data / "saves" / "worlds").is_dir())
+
+    def test_restarting_lifecycle_is_healthy(self) -> None:
+        from game_server.config import SupervisorConfig
+        from game_server.supervisor import GameServerSupervisor
+
+        plugin = load_plugin(FIXTURE)
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = SupervisorConfig(
+                install_dir=str(Path(tmp) / "game"),
+                state_dir=str(Path(tmp) / "state"),
+                backup_dir=str(Path(tmp) / "backups"),
+                status_http_enabled=False,
+                ha_notifications=False,
+                backup_enabled=False,
+                drop_privileges=False,
+                update_on_start=False,
+                auto_update_interval_minutes=0,
+                game_options={
+                    "world_name": "TestWorld",
+                    "data_dir": str(Path(tmp) / "world"),
+                    "logs_dir": str(Path(tmp) / "logs"),
+                },
+            )
+            supervisor = GameServerSupervisor(plugin, cfg)
+            supervisor._activity = "restarting"
+            health = supervisor.health()
+            self.assertEqual(health["lifecycle"], "restarting")
+            self.assertTrue(health["ok"])
 
 
 if __name__ == "__main__":

@@ -898,7 +898,7 @@ HTML_PAGE = """<!DOCTYPE html>
       const fields = {{}};
       document.querySelectorAll('[data-world-create-field]').forEach((el) => {{
         const key = el.getAttribute('data-world-create-field');
-        if (key) fields[{{key}}] = el.value;
+        if (key) fields[key] = el.value;
       }});
       const ok = window.confirm(
         'Create world ' + name + '?\\n\\n' +

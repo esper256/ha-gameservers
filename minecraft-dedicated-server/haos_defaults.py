@@ -117,6 +117,37 @@ def _run_helper(args: list[str]) -> None:
     subprocess.run(cmd, check=True)
 
 
+def _results_file(install: Path) -> Path:
+    return install / ".install.env"
+
+
+def read_helper_results(install: Path) -> dict[str, str]:
+    path = _results_file(install)
+    if not path.is_file():
+        return {}
+    out: dict[str, str] = {}
+    try:
+        for raw in path.read_text(encoding="utf-8").splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            out[key.strip()] = value.strip().strip('"').strip("'")
+    except OSError:
+        return {}
+    return out
+
+
+def helper_server_entry(install: Path) -> Path | None:
+    raw = (read_helper_results(install).get("SERVER") or "").strip()
+    if not raw:
+        return None
+    path = Path(raw)
+    if not path.is_absolute():
+        path = install / path
+    return path
+
+
 def cmd_install() -> int:
     version = minecraft_version()
     root = install_dir()
@@ -129,6 +160,8 @@ def cmd_install() -> int:
         and marker.read_text(encoding="utf-8").strip() == version
         and fabric.is_dir()
         and neoforge.is_dir()
+        and _results_file(fabric).is_file()
+        and _results_file(neoforge).is_file()
     ):
         if STARTER_JAR.is_file() and not (neoforge / "server.jar").exists():
             shutil.copy2(STARTER_JAR, neoforge / "server.jar")
@@ -141,6 +174,7 @@ def cmd_install() -> int:
             "install-fabric-loader",
             f"--minecraft-version={version}",
             f"--output-directory={fabric}",
+            f"--results-file={_results_file(fabric)}",
         ]
     )
     _run_helper(
@@ -148,11 +182,11 @@ def cmd_install() -> int:
             "install-neoforge",
             f"--minecraft-version={version}",
             f"--output-directory={neoforge}",
+            f"--results-file={_results_file(neoforge)}",
         ]
     )
     if STARTER_JAR.is_file():
         shutil.copy2(STARTER_JAR, neoforge / "server.jar")
-    marker = root / ".loaders_ready"
     marker.write_text(f"{version}\n", encoding="utf-8")
     print(version, flush=True)
     return 0
@@ -226,27 +260,42 @@ def _write_server_properties(directory: Path) -> None:
     (directory / "server.properties").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+_LAUNCH_LINKS = (
+    "run.sh",
+    "run.bat",
+    "user_jvm_args.txt",
+    "unix_args.txt",
+    "libraries",
+    "versions",
+    "server.jar",
+)
+
+
+def _replace_link(src: Path, dest: Path) -> None:
+    if not src.exists():
+        return
+    if dest.is_symlink() or dest.is_file():
+        dest.unlink()
+    elif dest.exists():
+        return
+    dest.symlink_to(src)
+
+
 def _link_install(directory: Path, loader: str, version: str) -> None:
     install = install_dir() / f"{loader}-{version}"
     if not install.is_dir():
         print(f"Install tree missing: {install}", file=sys.stderr)
         return
-    for name in ("libraries", "versions", "fabric-server-launch.jar", "server.jar"):
-        src = install / name
-        dest = directory / name
-        if dest.is_symlink() or dest.exists():
-            if dest.is_symlink() or dest.is_file():
-                dest.unlink()
-            elif dest.is_dir() and name != "libraries":
-                continue
-        if src.exists():
-            dest.symlink_to(src)
-    unix_args = install / "unix_args.txt"
-    if unix_args.is_file():
-        dest = directory / "unix_args.txt"
-        if dest.exists() or dest.is_symlink():
-            dest.unlink()
-        dest.symlink_to(unix_args)
+    for name in _LAUNCH_LINKS:
+        _replace_link(install / name, directory / name)
+    entry = helper_server_entry(install)
+    if entry is not None and entry.exists():
+        try:
+            entry.resolve().relative_to(install.resolve())
+        except ValueError:
+            pass
+        else:
+            _replace_link(entry, directory / entry.name)
 
 
 def _github_json(url: str) -> Any:
@@ -312,14 +361,18 @@ def cmd_run() -> int:
     profile = read_profile(directory)
     loader = str(profile.get("loader") or "neoforge").lower()
     version = str(profile.get("minecraft_version") or minecraft_version())
+    install = install_dir() / f"{loader}-{version}"
     _link_install(directory, loader, version)
     java_opts = env_or_option("java_opts", "-Xms2G -Xmx4G")
     os.chdir(directory)
     cmd = ["java", *java_opts.split()]
     if loader == "fabric":
-        launch = directory / "fabric-server-launch.jar"
-        if not launch.exists():
-            print("Missing fabric-server-launch.jar", file=sys.stderr)
+        launch = fabric_launcher_jar(install, directory)
+        if launch is None:
+            print(
+                "Missing Fabric launcher (install results SERVER=)",
+                file=sys.stderr,
+            )
             return 1
         cmd += ["-jar", str(launch), "nogui"]
     else:
@@ -330,6 +383,18 @@ def cmd_run() -> int:
         cmd += ["-jar", str(starter), "nogui"]
     os.execvp(cmd[0], cmd)
     return 1
+
+
+def fabric_launcher_jar(install: Path, directory: Path) -> Path | None:
+    entry = helper_server_entry(install)
+    if entry is None:
+        return None
+    linked = directory / entry.name
+    if linked.exists():
+        return linked
+    if entry.exists():
+        return entry
+    return None
 
 
 def cmd_write_copyparty_config() -> int:
@@ -345,7 +410,7 @@ def cmd_write_copyparty_config() -> int:
     )
     hook.chmod(0o755)
     # Keep the config out of the incoming share so kids cannot edit it.
-    # {{p}} is Copyparty's uploaded-file path placeholder.
+    # xau is after-upload and receives the filesystem path as argv[1].
     (root / "copyparty.conf").write_text(
         f"""\
 [global]
@@ -360,7 +425,8 @@ def cmd_write_copyparty_config() -> int:
   {incoming}
   accs:
     rw: kids
-  xbu: {hook} {{p}}
+  flags:
+    xau: {hook}
 """,
         encoding="utf-8",
     )

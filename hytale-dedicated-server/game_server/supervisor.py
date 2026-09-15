@@ -24,7 +24,7 @@ from .notify import Notifier
 from .operator_action import read_operator_action
 from .package_install import PackageInstallError
 from .plugin import GamePlugin, load_plugin, resolve_plugin_path
-from .privileges import prepare_owned_paths
+from .privileges import chown_paths, prepare_owned_paths
 from .process_manager import ProcessManager
 from .status_http import StatusServer
 from .steam_gate import configure_gate
@@ -38,6 +38,7 @@ from .active_world import (
     try_sync_ha_addon_option,
 )
 from .world_catalog import (
+    assert_world_path_inside,
     expected_world_path,
     list_catalog_worlds,
     validate_create_fields,
@@ -45,8 +46,10 @@ from .world_catalog import (
     write_world_create_payload,
 )
 from .world_save import (
+    KIND_FILE,
     apply_world_upload,
     backup_sources_for,
+    infer_world_kind,
     locate_active_world,
     prepare_world_download,
     world_save_is_downloadable,
@@ -501,9 +504,9 @@ class GameServerSupervisor:
     def lifecycle(self) -> str:
         """Return a single phase a person can reason about.
 
-        Values: stopping, stopped, restoring, installing, updating, running,
-        waiting (operator action or update queued), failed (crash loop / left
-        down), starting.
+        Values: stopping, stopped, restoring, installing, updating, restarting,
+        running, waiting (operator action or update queued), failed (crash loop
+        / left down), starting.
         """
 
         if self._stop.is_set():
@@ -776,6 +779,21 @@ class GameServerSupervisor:
     ) -> dict[str, Any]:
         """Schedule a game-process restart without exiting the supervisor."""
 
+        blocked = self._reserve_restart(
+            reason, debounce_seconds=debounce_seconds
+        )
+        if blocked is not None:
+            return blocked
+        return self._restart_accepted(ignore_players=ignore_players)
+
+    def _reserve_restart(
+        self,
+        reason: str,
+        *,
+        debounce_seconds: float = 0,
+    ) -> dict[str, Any] | None:
+        """Mark a restart pending, or return an error payload without mutating world state."""
+
         if self._update_pending:
             return {
                 "ok": False,
@@ -801,6 +819,9 @@ class GameServerSupervisor:
             reason,
             f" in {delay:.0f}s" if delay else "",
         )
+        return None
+
+    def _restart_accepted(self, *, ignore_players: bool = True) -> dict[str, Any]:
         online = self._players_online()
         return {
             "ok": True,
@@ -852,10 +873,11 @@ class GameServerSupervisor:
                 "message": f"{world_name} is already the active world",
                 "world": world_name,
             }
+        blocked = self._reserve_restart("world-switch", debounce_seconds=0)
+        if blocked is not None:
+            return blocked
         self._select_world(world_name)
-        result = self.request_restart(reason="world-switch", debounce_seconds=0)
-        if not result.get("ok"):
-            return result
+        result = self._restart_accepted()
         result["world"] = world_name
         result["message"] = (
             f"Switching to {world_name}. The game server will restart."
@@ -879,19 +901,35 @@ class GameServerSupervisor:
             world_name=world_name,
             options=options,
         )
-        write_world_create_payload(expected_path=expected, fields=extra)
         if expected:
-            Path(expected).parent.mkdir(parents=True, exist_ok=True)
+            try:
+                assert_world_path_inside(expected, self.plugin.data_dir)
+            except ValueError as exc:
+                return {"ok": False, "error": str(exc)}
+        blocked = self._reserve_restart("world-create", debounce_seconds=0)
+        if blocked is not None:
+            return blocked
+        write_world_create_payload(expected_path=expected, fields=extra)
+        self._own_new_world_path(expected)
         self._select_world(world_name)
-        result = self.request_restart(reason="world-create", debounce_seconds=0)
-        if not result.get("ok"):
-            return result
+        result = self._restart_accepted()
         result["world"] = world_name
         result["created"] = True
         result["message"] = (
             f"Creating world {world_name}. The game server will restart."
         )
         return result
+
+    def _own_new_world_path(self, expected: str | None) -> None:
+        """Create the new world directory and chown it for the game user."""
+
+        if not expected:
+            return
+        target = Path(expected)
+        directory = target.parent if infer_world_kind(target) == KIND_FILE else target
+        directory.mkdir(parents=True, exist_ok=True)
+        if self.run_ids:
+            chown_paths(self.run_ids[0], self.run_ids[1], [directory])
 
     def _within_update_window(self) -> bool:
         start = self.config.update_window_start_hour

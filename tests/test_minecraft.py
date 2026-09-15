@@ -159,9 +159,52 @@ class PublishModTests(unittest.TestCase):
             finally:
                 os.environ.pop("PUBLISHER_PASSWORD", None)
             conf = (root / "copyparty.conf").read_text(encoding="utf-8")
-            self.assertIn("xbu:", conf)
-            self.assertIn("{p}", conf)
+            self.assertIn("xau:", conf)
+            self.assertIn("flags:", conf)
+            self.assertNotIn("xbu:", conf)
+            self.assertNotIn("{p}", conf)
             self.assertTrue((root / "on-upload.sh").is_file())
+
+
+class LaunchLinkTests(unittest.TestCase):
+    def tearDown(self) -> None:
+        os.environ.pop("INSTALL_DIR", None)
+
+    def test_neoforge_links_run_script_and_args(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            install = root / "installs" / "neoforge-1.21.1"
+            libraries = install / "libraries" / "net" / "neoforged"
+            libraries.mkdir(parents=True)
+            (install / "run.sh").write_text("#!/bin/sh\n", encoding="utf-8")
+            (install / "user_jvm_args.txt").write_text("-Xmx1G\n", encoding="utf-8")
+            (install / "server.jar").write_bytes(b"starter")
+            (install / ".install.env").write_text("SERVER=run.sh\n", encoding="utf-8")
+            world = root / "worlds" / "FamilyWorld"
+            world.mkdir(parents=True)
+            os.environ["INSTALL_DIR"] = str(root / "installs")
+            haos_defaults._link_install(world, "neoforge", "1.21.1")
+            self.assertTrue((world / "run.sh").exists())
+            self.assertTrue((world / "user_jvm_args.txt").exists())
+            self.assertTrue((world / "libraries").exists())
+            self.assertTrue((world / "server.jar").exists())
+
+    def test_fabric_uses_results_file_launcher_name(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            jar_name = "fabric-server-mc.1.21.1-loader.0.16.9-launcher.1.0.1.jar"
+            install = root / "installs" / "fabric-1.21.1"
+            install.mkdir(parents=True)
+            (install / jar_name).write_bytes(b"fabric")
+            (install / ".install.env").write_text(f"SERVER={jar_name}\n", encoding="utf-8")
+            world = root / "worlds" / "Creative"
+            world.mkdir(parents=True)
+            os.environ["INSTALL_DIR"] = str(root / "installs")
+            haos_defaults._link_install(world, "fabric", "1.21.1")
+            self.assertTrue((world / jar_name).exists())
+            self.assertFalse((world / "fabric-server-launch.jar").exists())
+            found = haos_defaults.fabric_launcher_jar(install, world)
+            self.assertEqual(found, world / jar_name)
 
 
 if __name__ == "__main__":

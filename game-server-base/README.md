@@ -233,7 +233,7 @@ A game-layer install or launch script may write `/data/supervisor/operator_actio
 - SteamCMD install/update with a rate gate (serialize, spacing, backoff)
 - Non-Steam `package_install` (`http_archive` or plugin `command` argv)
 - Optional Ingress operator-action card (`operator_action.json`: open URL, copy code)
-- Process supervision, crash restarts, in-process game restart (`POST /api/restart` or `restart.request`), privilege drop to `gameserver`
+- Process supervision, crash restarts, in-process game restart (`POST /api/restart` or `restart.request`; `/healthz` stays healthy while `restarting`), privilege drop to `gameserver`
 - By-kind world backups + retention profiles (per world name/slot); Ingress restore / NEW WORLD / upload; optional live save-flush via `pre_backup_stdin_commands`
 - Ingress world picker (catalog glob + create-world extra fields from the plugin)
 - HA Core notifications + `/data/supervisor/status.json`

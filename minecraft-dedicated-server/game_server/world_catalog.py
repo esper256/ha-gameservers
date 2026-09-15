@@ -135,7 +135,23 @@ def validate_world_name(name: str) -> str:
         raise ValueError(
             "World name must be 1–64 letters, digits, `.`, `_`, or `-`"
         )
+    if text in {".", ".."} or all(ch == "." for ch in text):
+        raise ValueError("World name cannot be '.' or '..'")
     return text
+
+
+def assert_world_path_inside(path: str | Path, data_dir: str | Path) -> Path:
+    """Resolve ``path`` and require it is a strict child of ``data_dir``."""
+
+    root = Path(data_dir).resolve()
+    resolved = Path(path).resolve()
+    try:
+        resolved.relative_to(root)
+    except ValueError as exc:
+        raise ValueError("World path must stay inside the data directory") from exc
+    if resolved == root:
+        raise ValueError("World path must stay inside the data directory")
+    return resolved
 
 
 def validate_create_fields(
