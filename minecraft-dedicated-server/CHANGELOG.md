@@ -1,5 +1,9 @@
 # Changelog
 
+## 3.14.3
+
+- The Minecraft version on Configuration is read from the live Home Assistant Supervisor API, not only `/data/options.json`. Logs now say which source supplied the pin (API, options file, env, or default).
+
 ## 3.14.2
 
 - Changing Minecraft version on Configuration starts a new server+mods snapshot even after the first launch. If that try fails, the last proven snapshot still starts; a later start tries the new pin again.
