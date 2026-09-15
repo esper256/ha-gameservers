@@ -171,7 +171,9 @@ def _next_history_index(folder: Path) -> int:
 
 def _request_restart() -> None:
     from game_server.active_world import write_restart_request
+    from golden_boot import mark_attempt_request
 
+    mark_attempt_request(profile_dir(active_world_name()))
     write_restart_request(
         state_dir(), reason="mod-publish", debounce_seconds=DEBOUNCE_SECONDS
     )

@@ -61,7 +61,7 @@ class MinecraftPluginTests(unittest.TestCase):
         self.assertIsNotNone(plugin.world_create)
         self.assertEqual(plugin.world_create.fields[0].id, "mod_loader")
         self.assertEqual(plugin.ui_theme.get("accent"), "#5aad32")
-        self.assertTrue(plugin.hold_on_crash_loop)
+        self.assertFalse(plugin.hold_on_crash_loop)
         import yaml
 
         cfg = yaml.safe_load(
@@ -69,7 +69,7 @@ class MinecraftPluginTests(unittest.TestCase):
                 encoding="utf-8"
             )
         )
-        self.assertFalse(cfg.get("watchdog"))
+        self.assertIn("healthz", str(cfg.get("watchdog") or ""))
         self.assertTrue(plugin.restart_when_empty)
         assert plugin.copyparty is not None
         self.assertEqual(plugin.copyparty.port, 8765)

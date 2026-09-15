@@ -542,24 +542,75 @@ def install_tree_ready(loader: str, version: str) -> bool:
 
 
 def prepare_game_command() -> list[str] | None:
-    """Link the HA pin install, stage uploads into mods/, return JVM argv."""
+    """Link install + stage mods. Attempt uses HA pin + uploads; golden uses the proven snapshot."""
+
+    from golden_boot import (
+        attempt_needs_player,
+        choose_boot_mode,
+        consume_attempt_request,
+        is_stock_uploads,
+        load_golden_meta,
+        record_attempt_state,
+        stage_golden_snapshot,
+        write_boot_session,
+    )
 
     directory = profile_dir()
     profile = read_profile(directory)
     loader = str(profile.get("loader") or "neoforge").lower()
     if loader not in {"neoforge", "fabric"}:
         loader = "neoforge"
-    version = minecraft_version()
-    if not install_tree_ready(loader, version):
-        print(
-            f"Install tree missing for Minecraft {version} ({loader}): "
-            f"{install_tree(loader, version)}",
-            file=sys.stderr,
+    ha_version = minecraft_version()
+    mode = choose_boot_mode(directory, ha_version=ha_version, loader=loader)
+    meta = load_golden_meta(directory) if mode == "golden" else None
+    if mode == "golden" and meta is None:
+        mode = "attempt"
+    if mode == "golden":
+        assert meta is not None
+        loader = str(meta.get("loader") or loader)
+        version = str(meta.get("minecraft_version") or ha_version)
+        if not install_tree_ready(loader, version):
+            print(
+                f"Golden install missing: {install_tree(loader, version)}",
+                file=sys.stderr,
+            )
+            return None
+        _link_install(directory, loader, version)
+        _ensure_rcon_properties(directory)
+        stage_golden_snapshot(directory)
+        write_boot_session(
+            directory,
+            mode="golden",
+            loader=loader,
+            minecraft_version=version,
+            stock=bool(meta.get("stock")),
+            proven=True,
         )
-        return None
-    _link_install(directory, loader, version)
-    _ensure_rcon_properties(directory)
-    stage_mod_snapshot(directory)
+    else:
+        version = ha_version
+        if not install_tree_ready(loader, version):
+            print(
+                f"Install tree missing for Minecraft {version} ({loader}): "
+                f"{install_tree(loader, version)}",
+                file=sys.stderr,
+            )
+            return None
+        consume_attempt_request(directory)
+        record_attempt_state(directory, ha_version=ha_version, loader=loader)
+        _link_install(directory, loader, version)
+        _ensure_rcon_properties(directory)
+        stage_mod_snapshot(directory)
+        write_boot_session(
+            directory,
+            mode="attempt",
+            loader=loader,
+            minecraft_version=version,
+            stock=is_stock_uploads(directory),
+            needs_player=attempt_needs_player(
+                directory, ha_version=ha_version, loader=loader
+            ),
+            proven=False,
+        )
     install = install_tree(loader, version)
     java_opts = env_or_option("java_opts", "-Xms2G -Xmx4G")
     cmd = ["java", *java_opts.split()]
@@ -864,6 +915,9 @@ def cmd_status_probe() -> int:
         if "player_count" not in findings and "player_count" in status:
             findings["player_count"] = status["player_count"]
     print(json.dumps(findings, separators=(",", ":")), flush=True)
+    from golden_boot import apply_probe_findings
+
+    apply_probe_findings(directory, findings)
     return 0
 
 
@@ -915,10 +969,10 @@ font-family:sans-serif;line-height:1.45">
   different). Delete a jar to take it off next restart (not AutoModpack).
   Use a build for this world&rsquo;s Minecraft version and loader
   (the pin on Configuration, Fabric or NeoForge per world).</p>
-  <p style="margin:0.6rem 0 0">The game keeps the last launch snapshot
-  until it restarts. If anyone is playing, it waits until the last
-  player leaves, then restarts. Then relaunch Minecraft if AutoModpack
-  asks.</p>
+  <p style="margin:0.6rem 0 0">The game keeps the last proven snapshot
+  until a new pin or upload is ready to try. If anyone is playing, it
+  waits until the last player leaves, then restarts. Then relaunch
+  Minecraft if AutoModpack asks.</p>
 </div>
 """,
         encoding="utf-8",
