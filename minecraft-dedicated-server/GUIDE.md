@@ -31,7 +31,7 @@ Each world is a profile (save + mods + Fabric or NeoForge). Kids publish JARs on
 
 2. Install **Minecraft Dedicated Server**.
 3. Open **Documentation**. Accept EULA, set the publisher password, **Start**.
-4. Forward **TCP 25565**. Keep **TCP 8765** on the LAN.
+4. Forward the Minecraft Java port you mapped in the add-on Network settings. Keep the upload port on the LAN.
 5. Create worlds in **Open Web UI**. Default loader is NeoForge.
 6. Prism: one instance per loader. First join trusts AutoModpack, then relaunch.
 
@@ -39,7 +39,7 @@ Each world is a profile (save + mods + Fabric or NeoForge). Kids publish JARs on
 
 ## Publishing a mod
 
-Build a normal Fabric or NeoForge JAR (must match the world). Open the upload page, sign in, drop the JAR onto the live mods folder. Same mod id replaces the last build. If anyone is playing, the server waits until they leave, then restarts. Relaunch Minecraft if AutoModpack asks.
+Build a normal Fabric or NeoForge JAR (must match the world). Open the upload page, sign in, drop the JAR onto the live mods folder. Same mod id replaces the last build. If the server is empty it restarts soon after; if anyone is playing it waits until they leave. Relaunch Minecraft if AutoModpack asks.
 
 To remove a mod, delete the jar on that same page (leave AutoModpack).
 

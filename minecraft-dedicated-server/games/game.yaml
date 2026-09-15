@@ -91,12 +91,12 @@ copyparty:
     - python3
     - /opt/publish_mod.py
     - --after-delete
-player_probe:
+status_probe:
   interval_seconds: 10
   argv:
     - python3
     - /opt/haos_defaults.py
-    - player-count
+    - status-probe
 log_patterns:
   ready:
     - '(?i)done \(.*\)! for help'

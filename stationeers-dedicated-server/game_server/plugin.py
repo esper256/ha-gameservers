@@ -27,21 +27,21 @@ PLAYER_TRACKING_MODES = frozenset({PLAYER_TRACKING_COUNT, PLAYER_TRACKING_PRESEN
 
 
 @dataclass
-class PlayerProbeSpec:
-    """Optional argv that prints a live player count (stdout integer)."""
+class StatusProbeSpec:
+    """Optional argv that prints a JSON object of live game status fields."""
 
     argv: list[str]
     interval_seconds: float = 10.0
 
     @classmethod
-    def from_dict(cls, data: Any) -> PlayerProbeSpec | None:
+    def from_dict(cls, data: Any) -> StatusProbeSpec | None:
         if not data:
             return None
         if not isinstance(data, dict):
-            raise ValueError("player_probe must be an object")
+            raise ValueError("status_probe must be an object")
         argv = [str(x) for x in (data.get("argv") or []) if str(x).strip()]
         if not argv:
-            raise ValueError("player_probe requires argv")
+            raise ValueError("status_probe requires argv")
         interval = float(data.get("interval_seconds") or 10)
         if interval < 1:
             interval = 1.0
@@ -139,7 +139,7 @@ class GamePlugin:
     # already down). World switch/create still restart immediately.
     restart_when_empty: bool = False
     copyparty: CopypartySpec | None = None
-    player_probe: PlayerProbeSpec | None = None
+    status_probe: StatusProbeSpec | None = None
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "GamePlugin":
@@ -228,7 +228,7 @@ class GamePlugin:
             hold_on_crash_loop=bool(data.get("hold_on_crash_loop", False)),
             restart_when_empty=bool(data.get("restart_when_empty", False)),
             copyparty=CopypartySpec.from_dict(data.get("copyparty")),
-            player_probe=PlayerProbeSpec.from_dict(data.get("player_probe")),
+            status_probe=StatusProbeSpec.from_dict(data.get("status_probe")),
         )
 
     @property
@@ -325,8 +325,8 @@ class GamePlugin:
             keys.update(_template_option_env_keys(self.copyparty.root))
             if self.copyparty.password_option:
                 keys.add(self.copyparty.password_option.upper())
-        if self.player_probe is not None:
-            for token in self.player_probe.argv:
+        if self.status_probe is not None:
+            for token in self.status_probe.argv:
                 keys.update(_template_option_env_keys(token))
         # ProcessManager only injects java_opts when argv[0] is java.
         if self.executable and str(self.executable[0]).strip() == "java":

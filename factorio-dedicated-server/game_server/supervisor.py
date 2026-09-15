@@ -18,6 +18,7 @@ from .backup import BackupManager, EMPTY_WORLD
 from .config import SupervisorConfig, load_config
 from .disk import ensure_free_mb
 from .copyparty import CopypartyPublisher
+from .status_probe import apply_status_probe, parse_status_probe_stdout
 from .lifecycle import LIFECYCLE_HEALTHY
 from .log_bridge import configure_logging
 from .log_tools import LogToolbox
@@ -212,7 +213,6 @@ class GameServerSupervisor:
             options=config.game_options,
             world_name=self._active_world_name(),
         )
-        self._probed_players: int | None = None
         self._probe_thread: threading.Thread | None = None
         self._logged_empty_restart = False
 
@@ -970,20 +970,12 @@ class GameServerSupervisor:
     def _players_online(self) -> int | None:
         """Return player count when known; None when tracking cannot tell."""
 
-        if self._probed_players is not None:
-            return self._probed_players
-        if not self.monitor.player_tracking_enabled:
-            return None
         state = self.monitor.state
-        if not state.players_known and not state.players:
-            # Active patterns exist but nothing observed yet — treat as unknown
-            # until we see a join/leave/count signal (safer than assuming 0).
-            return None
         if state.players:
             return len(state.players)
-        if state.player_count is None:
-            return None
-        return int(state.player_count)
+        if state.players_known and state.player_count is not None:
+            return int(state.player_count)
+        return None
 
     def _restart_blocked_by_players(self) -> bool:
         """True when a deferred restart should wait for the last player to leave."""
@@ -996,20 +988,20 @@ class GameServerSupervisor:
             return False
         online = self._players_online()
         if online is None:
-            return False
+            return True
         return online > 0
 
-    def _start_player_probe(self) -> None:
-        spec = self.plugin.player_probe
+    def _start_status_probe(self) -> None:
+        spec = self.plugin.status_probe
         if spec is None:
             return
         self._probe_thread = threading.Thread(
-            target=self._player_probe_loop, name="player-probe", daemon=True
+            target=self._status_probe_loop, name="status-probe", daemon=True
         )
         self._probe_thread.start()
 
-    def _player_probe_loop(self) -> None:
-        spec = self.plugin.player_probe
+    def _status_probe_loop(self) -> None:
+        spec = self.plugin.status_probe
         if spec is None:
             return
         env = {
@@ -1018,9 +1010,7 @@ class GameServerSupervisor:
             "DATA_DIR": self.plugin.data_dir,
         }
         while not self._stop.is_set():
-            if not self.process.running:
-                self._probed_players = 0 if self.process.start_count else None
-            else:
+            if self.process.running:
                 try:
                     completed = subprocess.run(  # noqa: S603
                         spec.argv,
@@ -1033,16 +1023,9 @@ class GameServerSupervisor:
                 except (OSError, subprocess.TimeoutExpired):
                     completed = None
                 if completed is not None and completed.returncode == 0:
-                    text = (completed.stdout or "").strip().splitlines()
-                    if text:
-                        try:
-                            count = int(text[-1].strip())
-                        except ValueError:
-                            count = -1
-                        if count >= 0:
-                            self._probed_players = count
-                            self.monitor.state.player_count = count
-                            self.monitor.state.players_known = True
+                    payload = parse_status_probe_stdout(completed.stdout or "")
+                    if payload is not None:
+                        apply_status_probe(self.monitor.state, payload)
             if self._stop.wait(spec.interval_seconds):
                 break
 
@@ -1601,7 +1584,7 @@ class GameServerSupervisor:
             self.status_server.start()
 
         self._publisher.start()
-        self._start_player_probe()
+        self._start_status_probe()
 
         self._status_thread = threading.Thread(
             target=self._status_loop, name="status-writer", daemon=True

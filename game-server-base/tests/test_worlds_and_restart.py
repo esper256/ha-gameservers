@@ -314,19 +314,24 @@ class RestartSupervisorTests(unittest.TestCase):
             )
             supervisor = GameServerSupervisor(plugin, cfg)
             supervisor._restart_reason = "mod-publish"
-            supervisor._probed_players = 2
             with patch.object(
                 ProcessManager, "running", new_callable=PropertyMock
             ) as running:
                 running.return_value = True
                 self.assertTrue(supervisor._restart_blocked_by_players())
-                supervisor._probed_players = 0
+                supervisor.monitor.state.player_count = 2
+                supervisor.monitor.state.players_known = True
+                self.assertTrue(supervisor._restart_blocked_by_players())
+                supervisor.monitor.state.player_count = 0
                 self.assertFalse(supervisor._restart_blocked_by_players())
-                supervisor._probed_players = 3
+                supervisor.monitor.state.player_count = 3
                 supervisor._restart_reason = "world-switch"
                 self.assertFalse(supervisor._restart_blocked_by_players())
             result = supervisor.request_restart(reason="mod-publish")
             self.assertIn("last player leaves", result["message"])
+            supervisor.monitor.state.players_known = False
+            supervisor.monitor.state.player_count = None
+            self.assertFalse(supervisor._restart_blocked_by_players())
 
 
 if __name__ == "__main__":

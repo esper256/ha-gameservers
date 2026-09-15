@@ -63,8 +63,8 @@ class MinecraftPluginTests(unittest.TestCase):
         self.assertEqual(plugin.copyparty.port, 8765)
         self.assertEqual(plugin.copyparty.root, "{data_dir}/{world_name}/mods")
         self.assertIn("--guard-upload", plugin.copyparty.before_upload)
-        assert plugin.player_probe is not None
-        self.assertIn("player-count", plugin.player_probe.argv)
+        assert plugin.status_probe is not None
+        self.assertIn("status-probe", plugin.status_probe.argv)
 
     def test_config_version_matches_supervisor(self) -> None:
         import yaml
@@ -319,6 +319,36 @@ class LaunchLinkTests(unittest.TestCase):
             self.assertFalse((world / "fabric-server-launch.jar").exists())
             found = haos_defaults.fabric_launcher_jar(install, world)
             self.assertEqual(found, world / jar_name)
+
+
+class StatusProbeTests(unittest.TestCase):
+    def test_list_response_and_status_json_omit(self) -> None:
+        self.assertEqual(
+            haos_defaults.parse_java_list_response(
+                "There are 2 of a max of 8 players online: Ada, Bob"
+            ),
+            2,
+        )
+        self.assertEqual(
+            haos_defaults.parse_java_list_response(
+                "There are 0 of a max of 8 players online:"
+            ),
+            0,
+        )
+        self.assertIsNone(haos_defaults.parse_java_list_response(""))
+        missing = haos_defaults.findings_from_status_json(
+            {"version": {"name": "1.21.1"}, "players": {"max": 8}}
+        )
+        self.assertEqual(missing.get("ready"), True)
+        self.assertEqual(missing.get("game_version"), "1.21.1")
+        self.assertNotIn("player_count", missing)
+        zero = haos_defaults.findings_from_status_json({"players": {"online": 0}})
+        self.assertEqual(zero.get("player_count"), 0)
+        self.assertEqual(
+            haos_defaults._bind_port({"server-port": "25566"}, "server-port", "SERVER_PORT"),
+            25566,
+        )
+        self.assertIsNone(haos_defaults._bind_port({}, "server-port", "MISSING_PORT"))
 
 
 if __name__ == "__main__":

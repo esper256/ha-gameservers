@@ -250,18 +250,28 @@ def _write_server_properties(directory: Path) -> None:
     slots = env_or_option("server_slots", "8")
     online = env_or_option("online_mode", "true").lower()
     whitelist = env_or_option("white_list", "true").lower()
-    port = os.environ.get("SERVER_PORT") or "25565"
+    port = os.environ.get("SERVER_PORT") or ""
+    rcon_port = os.environ.get("RCON_PORT") or ""
+    password = _ensure_rcon_password()
     lines = [
         f"motd={motd}",
         f"max-players={slots}",
         f"online-mode={'true' if online in {'1', 'true', 'yes', 'on'} else 'false'}",
         f"white-list={'true' if whitelist in {'1', 'true', 'yes', 'on'} else 'false'}",
-        f"server-port={port}",
         "server-ip=0.0.0.0",
         "level-name=world",
         "enable-status=true",
         "sync-chunk-writes=true",
+        "enable-rcon=true",
+        f"rcon.password={password}",
+        "broadcast-rcon-to-ops=false",
     ]
+    if port.strip():
+        lines.append(f"server-port={port.strip()}")
+    if rcon_port.strip():
+        lines.append(f"rcon.port={rcon_port.strip()}")
+    else:
+        lines.append("rcon.port=25575")
     (directory / "server.properties").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
@@ -368,6 +378,7 @@ def cmd_run() -> int:
     version = str(profile.get("minecraft_version") or minecraft_version())
     install = install_dir() / f"{loader}-{version}"
     _link_install(directory, loader, version)
+    _ensure_rcon_properties(directory)
     java_opts = env_or_option("java_opts", "-Xms2G -Xmx4G")
     os.chdir(directory)
     cmd = ["java", *java_opts.split()]
@@ -425,12 +436,150 @@ def _read_varint(sock) -> int:
             raise OSError("varint too long")
 
 
-def minecraft_status_online(host: str = "127.0.0.1", port: int = 25565) -> int | None:
-    """Java server-list ping (same JSON the client multiplayer list uses)."""
+def read_server_properties(directory: Path) -> dict[str, str]:
+    path = directory / "server.properties"
+    out: dict[str, str] = {}
+    if not path.is_file():
+        return out
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return out
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        key, _, value = stripped.partition("=")
+        out[key.strip()] = value.strip()
+    return out
+
+
+def upsert_server_properties(directory: Path, updates: dict[str, str]) -> None:
+    path = directory / "server.properties"
+    current = read_server_properties(directory)
+    current.update({k: v for k, v in updates.items() if v != ""})
+    lines = [f"{key}={value}" for key, value in current.items()]
+    directory.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _rcon_password_path() -> Path:
+    return state_dir() / "rcon.password"
+
+
+def _ensure_rcon_password() -> str:
+    path = _rcon_password_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.is_file():
+        text = path.read_text(encoding="utf-8").strip()
+        if text:
+            return text
+    import secrets
+
+    password = secrets.token_urlsafe(18)
+    path.write_text(password + "\n", encoding="utf-8")
+    try:
+        path.chmod(0o600)
+    except OSError:
+        pass
+    return password
+
+
+def _ensure_rcon_properties(directory: Path) -> None:
+    password = _ensure_rcon_password()
+    props = read_server_properties(directory)
+    updates = {
+        "enable-rcon": "true",
+        "rcon.password": password,
+        "broadcast-rcon-to-ops": "false",
+        "enable-status": "true",
+    }
+    if not str(props.get("rcon.port") or "").strip():
+        updates["rcon.port"] = (os.environ.get("RCON_PORT") or "").strip() or "25575"
+    upsert_server_properties(directory, updates)
+
+
+def _bind_port(props: dict[str, str], key: str, env_key: str) -> int | None:
+    raw = str(props.get(key) or os.environ.get(env_key) or "").strip()
+    if not raw:
+        return None
+    try:
+        port = int(raw)
+    except ValueError:
+        return None
+    if port < 1 or port > 65535:
+        return None
+    return port
+
+
+def parse_java_list_response(text: str) -> int | None:
+    """Player count from RCON ``list``. Names after a colon; empty after colon is 0."""
+
+    blob = (text or "").strip()
+    if not blob:
+        return None
+    if ":" not in blob:
+        return None
+    after = blob.rsplit(":", 1)[-1].strip()
+    if not after:
+        return 0
+    names = [part.strip() for part in after.split(",") if part.strip()]
+    return len(names)
+
+
+def _rcon_recv_exact(sock, size: int) -> bytes:
+    buf = b""
+    while len(buf) < size:
+        chunk = sock.recv(size - len(buf))
+        if not chunk:
+            raise OSError("short rcon read")
+        buf += chunk
+    return buf
+
+
+def rcon_command(host: str, port: int, password: str, command: str) -> str | None:
+    import socket
+    import struct
+
+    def pack(req_id: int, kind: int, body: str) -> bytes:
+        payload = body.encode("utf-8") + b"\x00\x00"
+        data = struct.pack("<ii", req_id, kind) + payload
+        return struct.pack("<i", len(data)) + data
+
+    def read_packet(sock: socket.socket) -> tuple[int, str]:
+        header = _rcon_recv_exact(sock, 4)
+        length = struct.unpack("<i", header)[0]
+        if length < 10 or length > 4096:
+            raise OSError("bad rcon length")
+        body = _rcon_recv_exact(sock, length)
+        req_id, _kind = struct.unpack("<ii", body[:8])
+        payload = body[8:]
+        if payload.endswith(b"\x00\x00"):
+            payload = payload[:-2]
+        return req_id, payload.decode("utf-8", errors="replace")
+
+    sock = socket.create_connection((host, port), timeout=2.0)
+    try:
+        sock.sendall(pack(1, 3, password))
+        req_id, _ = read_packet(sock)
+        if req_id == -1:
+            return None
+        sock.sendall(pack(2, 2, command))
+        req_id, text = read_packet(sock)
+        if req_id == -1:
+            return None
+        return text
+    finally:
+        sock.close()
+
+
+def minecraft_status_payload(host: str, port: int) -> dict[str, Any]:
+    """Java status ping. Only keys the packet actually contained."""
 
     import socket
     import struct
 
+    out: dict[str, Any] = {}
     sock = socket.create_connection((host, port), timeout=2.0)
     try:
         host_bytes = _pack_mc_str(host)
@@ -451,7 +600,7 @@ def minecraft_status_online(host: str = "127.0.0.1", port: int = 25565) -> int |
                 break
             payload += chunk
         if not payload or payload[0] != 0:
-            return None
+            return out
         rest = payload[1:]
         n = 0
         shift = 0
@@ -465,27 +614,66 @@ def minecraft_status_online(host: str = "127.0.0.1", port: int = 25565) -> int |
             shift += 7
         raw = rest[idx : idx + n]
         data = json.loads(raw.decode("utf-8"))
-        players = data.get("players") if isinstance(data, dict) else None
-        if not isinstance(players, dict):
-            return None
-        return int(players.get("online") or 0)
+        return findings_from_status_json(data)
     finally:
         sock.close()
 
 
-def cmd_player_count() -> int:
-    port_raw = os.environ.get("SERVER_PORT") or "25565"
-    try:
-        port = int(port_raw)
-    except ValueError:
-        port = 25565
-    try:
-        online = minecraft_status_online("127.0.0.1", port)
-    except (OSError, json.JSONDecodeError, UnicodeDecodeError, ValueError):
-        return 1
-    if online is None:
-        return 1
-    print(online, flush=True)
+def findings_from_status_json(data: Any) -> dict[str, Any]:
+    """Map a decoded status ping object to asserted probe keys only."""
+
+    out: dict[str, Any] = {}
+    if not isinstance(data, dict):
+        return out
+    out["ready"] = True
+    version = data.get("version")
+    if isinstance(version, dict):
+        name = str(version.get("name") or "").strip()
+        if name:
+            out["game_version"] = name
+    players = data.get("players")
+    if isinstance(players, dict) and "online" in players and players["online"] is not None:
+        try:
+            if isinstance(players["online"], bool):
+                raise ValueError("bool")
+            out["player_count"] = int(players["online"])
+        except (TypeError, ValueError):
+            pass
+    return out
+
+
+def cmd_status_probe() -> int:
+    """Supervisor status_probe argv: JSON object, omitted keys mean no yield."""
+
+    directory = profile_dir()
+    _ensure_rcon_properties(directory)
+    props = read_server_properties(directory)
+    findings: dict[str, Any] = {}
+    password = str(props.get("rcon.password") or "").strip() or _ensure_rcon_password()
+    rcon_port = _bind_port(props, "rcon.port", "RCON_PORT")
+    if str(props.get("enable-rcon") or "").lower() in {"true", "1", "yes", "on"} and rcon_port:
+        import struct
+
+        try:
+            listed = rcon_command("127.0.0.1", rcon_port, password, "list")
+        except (OSError, struct.error):
+            listed = None
+        count = parse_java_list_response(listed or "")
+        if count is not None:
+            findings["player_count"] = count
+    game_port = _bind_port(props, "server-port", "SERVER_PORT")
+    if game_port is not None:
+        try:
+            status = minecraft_status_payload("127.0.0.1", game_port)
+        except (OSError, json.JSONDecodeError, UnicodeDecodeError, ValueError):
+            status = {}
+        if "ready" in status:
+            findings["ready"] = True
+        if "game_version" in status and "game_version" not in findings:
+            findings["game_version"] = status["game_version"]
+        if "player_count" not in findings and "player_count" in status:
+            findings["player_count"] = status["player_count"]
+    print(json.dumps(findings, separators=(",", ":")), flush=True)
     return 0
 
 
@@ -556,12 +744,13 @@ def main(argv: list[str]) -> int:
         "run": cmd_run,
         "write-copyparty-banner": cmd_write_copyparty_banner,
         "write-copyparty-config": cmd_write_copyparty_banner,
-        "player-count": cmd_player_count,
+        "status-probe": cmd_status_probe,
+        "player-count": cmd_status_probe,
     }
     if cmd not in handlers:
         print(
             "Usage: haos_defaults.py print-version|install|prepare-world|run|"
-            "write-copyparty-banner|player-count",
+            "write-copyparty-banner|status-probe",
             file=sys.stderr,
         )
         return 2

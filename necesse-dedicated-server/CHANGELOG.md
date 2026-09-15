@@ -2,7 +2,7 @@
 
 ## 3.9.0
 
-- Shared supervisor **3.9**: optional Copyparty file-drop (`copyparty.port` + `copyparty.root` on a live mods directory), optional `player_probe` / `restart_when_empty`, optional `hold_on_crash_loop`. `/healthz` is **not** healthy while lifecycle is `failed` (HA watchdog still recycles titles that do not opt in). Vendored `game_server/` sync.
+- Shared supervisor **3.9**: optional Copyparty file-drop (`copyparty.port` + `copyparty.root` on a live mods directory), optional `status_probe` JSON (peer to log regexes; omitted keys do not overwrite), optional `restart_when_empty`, optional `hold_on_crash_loop`. `/healthz` is **not** healthy while lifecycle is `failed` (HA watchdog still recycles titles that do not opt in). Vendored `game_server/` sync.
 
 ## 3.8.0
 
