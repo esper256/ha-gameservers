@@ -230,19 +230,21 @@ def _publish_locked(incoming: Path) -> int:
     dest_dir.mkdir(parents=True, exist_ok=True)
     canonical = dest_dir / f"{mod_id}.jar"
     hist = history_root / mod_id
-    if canonical.is_file():
+    same = incoming.resolve() == canonical.resolve()
+    if canonical.is_file() and not same:
         index = _next_history_index(hist)
         slot = hist / str(index)
         slot.mkdir(parents=True, exist_ok=True)
         shutil.copy2(canonical, slot / "artifact.jar")
         _prune_history(hist)
-    tmp = dest_dir / f"{mod_id}.jar.partial"
-    shutil.copy2(incoming, tmp)
-    tmp.replace(canonical)
-    try:
-        incoming.unlink()
-    except OSError:
-        pass
+    if not same:
+        tmp = dest_dir / f"{mod_id}.jar.partial"
+        shutil.copy2(incoming, tmp)
+        tmp.replace(canonical)
+        try:
+            incoming.unlink()
+        except OSError:
+            pass
     _request_restart()
     print(f"Published {mod_id} -> {canonical} (restart in {DEBOUNCE_SECONDS}s)")
     return 0
@@ -369,6 +371,32 @@ def guard_delete(path: Path) -> int:
     return 0
 
 
+def guard_upload(path: Path) -> int:
+    """Block uploads that would replace a protected jar (Copyparty xbu ``c``)."""
+
+    mods = (profile_dir() / "mods").resolve()
+    candidate = path if path.is_absolute() else mods / path.name
+    try:
+        resolved = candidate.resolve()
+        resolved.relative_to(mods)
+    except (OSError, ValueError):
+        print("Refusing upload outside the active mods folder", file=sys.stderr)
+        return 2
+    stem = resolved.stem.lower()
+    if stem.startswith("automodpack") or stem in PROTECTED_MOD_IDS:
+        print(f"Refusing to replace protected mod {stem}", file=sys.stderr)
+        return 2
+    if resolved.is_file() and resolved.suffix.lower() == ".jar":
+        try:
+            info = inspect_jar(resolved)
+            if str(info.get("mod_id") or "") in PROTECTED_MOD_IDS:
+                print("Refusing to replace a protected mod", file=sys.stderr)
+                return 2
+        except (ValueError, zipfile.BadZipFile, OSError):
+            pass
+    return 0
+
+
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description="Publish a family Minecraft mod JAR")
     parser.add_argument("path", nargs="?", help="Uploaded JAR path")
@@ -378,6 +406,11 @@ def main(argv: list[str]) -> int:
         help="Read Copyparty xiu paths (one per line, or JSON list) from stdin",
     )
     parser.add_argument("--rollback", metavar="MOD_ID", help="Restore last archived JAR")
+    parser.add_argument(
+        "--guard-upload",
+        metavar="PATH",
+        help="Copyparty before-upload check (protected mods)",
+    )
     parser.add_argument(
         "--guard-delete",
         metavar="PATH",
@@ -389,6 +422,8 @@ def main(argv: list[str]) -> int:
         help="Copyparty after-delete restart request",
     )
     args = parser.parse_args(argv[1:])
+    if args.guard_upload:
+        return guard_upload(Path(args.guard_upload))
     if args.guard_delete:
         return guard_delete(Path(args.guard_delete))
     if args.after_delete:

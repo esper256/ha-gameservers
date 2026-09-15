@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import logging
+import os
 import signal
+import subprocess
 import tarfile
 import threading
 import time
@@ -15,6 +17,7 @@ from . import package_install, steamcmd
 from .backup import BackupManager, EMPTY_WORLD
 from .config import SupervisorConfig, load_config
 from .disk import ensure_free_mb
+from .copyparty import CopypartyPublisher
 from .lifecycle import LIFECYCLE_HEALTHY
 from .log_bridge import configure_logging
 from .log_tools import LogToolbox
@@ -202,6 +205,16 @@ class GameServerSupervisor:
         self._restart_reason: str | None = None
         self._restart_not_before = 0.0
         self._restart_lock = threading.Lock()
+        self._publisher = CopypartyPublisher(
+            plugin.copyparty,
+            state_dir=config.state_dir,
+            data_dir=plugin.data_dir,
+            options=config.game_options,
+            world_name=self._active_world_name(),
+        )
+        self._probed_players: int | None = None
+        self._probe_thread: threading.Thread | None = None
+        self._logged_empty_restart = False
 
     def _package_extra_env(self) -> dict[str, str]:
         """Env for plugin command installers (dirs + optional release channel)."""
@@ -823,14 +836,25 @@ class GameServerSupervisor:
 
     def _restart_accepted(self, *, ignore_players: bool = True) -> dict[str, Any]:
         online = self._players_online()
-        return {
-            "ok": True,
-            "message": (
+        wait_empty = (
+            self.plugin.restart_when_empty
+            and self._restart_reason not in {"world-switch", "world-create"}
+        )
+        if wait_empty:
+            message = (
+                "Restart scheduled. If anyone is playing, the game waits until "
+                "the last player leaves."
+            )
+        elif ignore_players:
+            message = (
                 "Restart scheduled. The game server will stop and start again. "
                 "Anyone playing will be disconnected."
-                if ignore_players
-                else "Restart scheduled."
-            ),
+            )
+        else:
+            message = "Restart scheduled."
+        return {
+            "ok": True,
+            "message": message,
             "restart_pending": True,
             "players_online": online,
         }
@@ -877,6 +901,7 @@ class GameServerSupervisor:
         if blocked is not None:
             return blocked
         self._select_world(world_name)
+        self._publisher.reload_for_world(world_name, self.config.game_options)
         result = self._restart_accepted()
         result["world"] = world_name
         result["message"] = (
@@ -912,6 +937,7 @@ class GameServerSupervisor:
         write_world_create_payload(expected_path=expected, fields=extra)
         self._own_new_world_path(expected)
         self._select_world(world_name)
+        self._publisher.reload_for_world(world_name, self.config.game_options)
         result = self._restart_accepted()
         result["world"] = world_name
         result["created"] = True
@@ -942,7 +968,10 @@ class GameServerSupervisor:
         return hour >= start or hour < end
 
     def _players_online(self) -> int | None:
-        """Return player count when known; None when log tracking cannot tell."""
+        """Return player count when known; None when tracking cannot tell."""
+
+        if self._probed_players is not None:
+            return self._probed_players
         if not self.monitor.player_tracking_enabled:
             return None
         state = self.monitor.state
@@ -955,6 +984,67 @@ class GameServerSupervisor:
         if state.player_count is None:
             return None
         return int(state.player_count)
+
+    def _restart_blocked_by_players(self) -> bool:
+        """True when a deferred restart should wait for the last player to leave."""
+
+        if not self.plugin.restart_when_empty:
+            return False
+        if self._restart_reason in {"world-switch", "world-create"}:
+            return False
+        if not self.process.running:
+            return False
+        online = self._players_online()
+        if online is None:
+            return False
+        return online > 0
+
+    def _start_player_probe(self) -> None:
+        spec = self.plugin.player_probe
+        if spec is None:
+            return
+        self._probe_thread = threading.Thread(
+            target=self._player_probe_loop, name="player-probe", daemon=True
+        )
+        self._probe_thread.start()
+
+    def _player_probe_loop(self) -> None:
+        spec = self.plugin.player_probe
+        if spec is None:
+            return
+        env = {
+            **os.environ,
+            **self._package_extra_env(),
+            "DATA_DIR": self.plugin.data_dir,
+        }
+        while not self._stop.is_set():
+            if not self.process.running:
+                self._probed_players = 0 if self.process.start_count else None
+            else:
+                try:
+                    completed = subprocess.run(  # noqa: S603
+                        spec.argv,
+                        check=False,
+                        capture_output=True,
+                        text=True,
+                        timeout=max(2.0, spec.interval_seconds - 1),
+                        env=env,
+                    )
+                except (OSError, subprocess.TimeoutExpired):
+                    completed = None
+                if completed is not None and completed.returncode == 0:
+                    text = (completed.stdout or "").strip().splitlines()
+                    if text:
+                        try:
+                            count = int(text[-1].strip())
+                        except ValueError:
+                            count = -1
+                        if count >= 0:
+                            self._probed_players = count
+                            self.monitor.state.player_count = count
+                            self.monitor.state.players_known = True
+            if self._stop.wait(spec.interval_seconds):
+                break
 
     def _empty_wait_expired(self) -> bool:
         """True when a pending update has waited long enough to interrupt players."""
@@ -1510,6 +1600,9 @@ class GameServerSupervisor:
             )
             self.status_server.start()
 
+        self._publisher.start()
+        self._start_player_probe()
+
         self._status_thread = threading.Thread(
             target=self._status_loop, name="status-writer", daemon=True
         )
@@ -1560,10 +1653,19 @@ class GameServerSupervisor:
                 self.request_restart(reason=reason, debounce_seconds=float(debounce))
 
             if self._restart_pending and time.time() >= self._restart_not_before:
-                try:
-                    self._apply_restart()
-                except Exception:
-                    LOG.exception("Game process restart failed")
+                if self._restart_blocked_by_players():
+                    if not self._logged_empty_restart:
+                        LOG.info(
+                            "Restart (%s) waiting until the last player leaves",
+                            self._restart_reason,
+                        )
+                        self._logged_empty_restart = True
+                else:
+                    self._logged_empty_restart = False
+                    try:
+                        self._apply_restart()
+                    except Exception:
+                        LOG.exception("Game process restart failed")
 
             if self._urgent_update_check:
                 try:
@@ -1623,12 +1725,12 @@ class GameServerSupervisor:
                     "Restart limit reached; supervisor is leaving the server stopped.",
                     force=True,
                 )
-                # Stay in the main loop so Ingress and other processes keep
-                # running. An operator restart (or restart.request) can start
-                # the game again after they fix the crash.
+                if not self.plugin.hold_on_crash_loop:
+                    break
 
         self.monitor.stop()
         self.backups.stop()
+        self._publisher.stop()
         if self.status_server:
             self.status_server.stop()
         # Idempotent if the signal handler already stopped the game.

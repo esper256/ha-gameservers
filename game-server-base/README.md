@@ -192,6 +192,10 @@ Point the container at your plugin with `GAME_PLUGIN` (Necesse’s `run.sh` does
 | `log_pattern_candidates` | Extra dry-run regexes for Ingress highlighting |
 | `ui_theme` | Ingress CSS colors (`accent`, `bg`, `panel`, …). Sample from official store art; keep `accent` unique vs sibling games. See [Ingress theme colors](#ingress-theme-colors) |
 | `player_tracking_mode` | `count` (default, numeric/named) or `presence` (Idle vs occupied; unknown leave → idle) |
+| `copyparty` | Optional file-drop: unique `port` and `root` template aimed at a live mods (or similar) directory. The supervisor writes Copyparty config and keeps the process up across game crashes and world switches. Game-layer hook argv (`before_upload`, `after_idle_upload`, `before_delete`, `after_delete`) validate and rename files. Not a generic sidecar runner. |
+| `player_probe` | Optional argv that prints a live player count (stdout integer). Used with `restart_when_empty`. |
+| `restart_when_empty` | Delay a pending game restart until player count is 0 (or the process is down). World switch/create still restart immediately. |
+| `hold_on_crash_loop` | Stay in the supervisor loop after the crash budget so Ingress (and Copyparty) keep running. `/healthz` is still **not** healthy while lifecycle is `failed`. Omit the HA add-on `watchdog` on titles that use this; other games keep the watchdog. |
 
 Shape reference: `game-server-base/tests/fixtures/example.game.yaml`
 
@@ -233,7 +237,7 @@ A game-layer install or launch script may write `/data/supervisor/operator_actio
 - SteamCMD install/update with a rate gate (serialize, spacing, backoff)
 - Non-Steam `package_install` (`http_archive` or plugin `command` argv)
 - Optional Ingress operator-action card (`operator_action.json`: open URL, copy code)
-- Process supervision, crash restarts, in-process game restart (`POST /api/restart` or `restart.request`; `/healthz` stays healthy while `restarting`), privilege drop to `gameserver`
+- Process supervision, crash restarts, in-process game restart (`POST /api/restart` or `restart.request`; `/healthz` stays healthy while `restarting`), optional Copyparty on a plugin-declared port+root, privilege drop to `gameserver`
 - By-kind world backups + retention profiles (per world name/slot); Ingress restore / NEW WORLD / upload; optional live save-flush via `pre_backup_stdin_commands`
 - Ingress world picker (catalog glob + create-world extra fields from the plugin)
 - HA Core notifications + `/data/supervisor/status.json`
