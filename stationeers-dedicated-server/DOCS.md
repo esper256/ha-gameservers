@@ -3,7 +3,7 @@
 ## Configure and start
 
 1. On **Configuration**, set at least:
-   - **Save name** (default `FamilyStation` — no spaces)
+   - **Save name** (default `World` — no spaces)
    - **World / map** (default `Mars2`; used when the save does not exist yet)
    - **Server password** (recommended)
 2. Leave **Server name** blank for a stable generated `HAOS Stationeers ####`.

@@ -187,14 +187,14 @@ class HytaleHaosDefaultsTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             options = root / "options.json"
-            options.write_text('{"server_name": "Family Hytale"}', encoding="utf-8")
+            options.write_text('{"server_name": "My Server"}', encoding="utf-8")
             self.assertEqual(
                 mod.resolve_server_name(
                     options_file=options,
                     state_dir=root / "state",
                     environ={},
                 ),
-                "Family Hytale",
+                "My Server",
             )
             self.assertEqual(
                 mod.resolve_server_name(
@@ -403,7 +403,7 @@ class HytaleHaosDefaultsTests(unittest.TestCase):
                 motd="hi",
                 password="secret",
                 max_players=12,
-                world_name="family",
+                world_name="default",
             )
             data = json.loads(path.read_text(encoding="utf-8"))
             self.assertEqual(data["ServerName"], "HAOS Hytale 0001")
@@ -411,7 +411,7 @@ class HytaleHaosDefaultsTests(unittest.TestCase):
             self.assertEqual(data["Password"], "secret")
             self.assertEqual(data["MaxPlayers"], 12)
             self.assertEqual(data["CustomModKey"], 3)
-            self.assertEqual(data["Defaults"]["World"], "family")
+            self.assertEqual(data["Defaults"]["World"], "default")
             self.assertTrue(data["Defaults"]["Keep"])
             self.assertFalse(data["Update"]["Enabled"])
             self.assertEqual(data["Update"]["Channel"], "release")

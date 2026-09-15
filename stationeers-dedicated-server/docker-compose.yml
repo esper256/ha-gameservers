@@ -20,7 +20,7 @@ services:
     environment:
       GAME_PLUGIN: /opt/games/game.yaml
       INSTALL_DIR: /data/game
-      WORLD_NAME: FamilyStation
+      WORLD_NAME: World
       WORLD_TYPE: Mars2
       # Leave SERVER_NAME unset/blank for a stable "HAOS Stationeers ####" default.
       # SERVER_NAME: My Station

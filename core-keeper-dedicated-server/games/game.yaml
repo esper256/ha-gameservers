@@ -43,7 +43,7 @@ ready_timeout_seconds: 300
 # Official ARGUMENTS.txt: -port *adds* Direct Connect (IP join / cross-play).
 # If omitted the server is Steam Datagram Relay only and will not accept IP.
 # -gameid is independent. This app always passes -port so LAN IP, forwarded
-# WAN IP, and Game ID work together (mixed household-on-LAN + remote Steam
+# WAN IP, and Game ID work together (LAN IP + remote Steam on Game ID).
 # on Game ID). run.sh sets SERVER_PORT=7778 to match the HA container port.
 # Password is IP-only; Game ID join does not use it.
 # Admin is not a CLI flag: haos_defaults merges admin_steam_ids into

@@ -25,7 +25,7 @@ services:
     environment:
       GAME_PLUGIN: /opt/games/game.yaml
       INSTALL_DIR: /data/game
-      WORLD_NAME: FamilyCore
+      WORLD_NAME: World
       WORLD_INDEX: "0"
       WORLD_MODE: "0"
       SERVER_SLOTS: "8"
@@ -33,7 +33,7 @@ services:
       # Leave GAME_ID / SERVER_PASSWORD unset for stable generated values.
       # GAME_ID: yourExistingJoinCode
       # SERVER_PASSWORD: yourJoinPassword
-      # Optional: pin household SteamID64 admins (comma-separated). Blank =
+      # Optional: pin SteamID64 admins (comma-separated). Blank =
       # first player to join a new world becomes admin.
       # ADMIN_STEAM_IDS: "76561198012345678,76561198087654321"
       UPDATE_ON_START: "true"

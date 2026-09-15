@@ -1,6 +1,6 @@
 name: "Necesse Dedicated Server"
 description: "Necesse dedicated multiplayer server with SteamCMD auto-updates, player-aware restarts, generational world backups, and an Ingress status/log toolkit."
-version: "3.10.0"
+version: "3.10.1"
 slug: "necesse_dedicated_server"
 url: "https://github.com/esper256/ha-gameservers/tree/main/necesse-dedicated-server"
 # SteamCMD / Necesse dedicated server binaries are x86_64. HAOS on aarch64 will not offer this app.
@@ -26,11 +26,11 @@ ports:
 ports_description:
   14159/udp: Port players use on this Home Assistant machine (UDP). Leave at 14159 unless that port is already taken.
 options:
-  world_name: "FamilyWorld"
+  world_name: "World"
   server_password: ""
   server_slots: 10
   server_owner: ""
-  server_motd: "Welcome to the family Necesse server!"
+  server_motd: "Welcome to the server!"
   pause_when_empty: true
   give_clients_power: false
   enable_logging: true

@@ -5,7 +5,7 @@ This app downloads Wube’s **free Linux headless package** from factorio.com (n
 ## Configure and start
 
 1. On **Configuration**, set at least:
-   - **Save name** (default `FamilyFactory` — no spaces)
+   - **Save name** (default `World` — no spaces)
    - **Game password** (recommended)
 2. Leave **Server name** blank for a stable generated `HAOS Factorio ####`.
 3. Leave **Space Age DLC** **off** unless every player owns Space Age (set this before first start).

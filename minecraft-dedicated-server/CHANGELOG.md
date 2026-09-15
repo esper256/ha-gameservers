@@ -1,12 +1,16 @@
 # Changelog
 
+## 3.10.1
+
+- Clearer names and defaults: mod-upload page (login user `mods`), default world `World`.
+
 ## 3.10.0
 
-- OPEN WEB UI: Uploads card shows how many files are in the drop folder and opens the kid upload page.
+- OPEN WEB UI: Uploads card shows how many files are in the drop folder and opens the mod-upload page.
 
 ## 3.9.0
 
-- Kid JAR uploads. The server waits until the last player leaves before restarting to apply them.
+- Mod JAR uploads. The server waits until the last player leaves before restarting to apply them.
 - Dropped mods are not used by a running game until that restart.
 - If Minecraft crash-loops, the add-on and upload page stay up.
 
@@ -32,4 +36,4 @@
 
 ## 3.8.0
 
-- First release: Fabric or NeoForge worlds, kid JAR uploads, AutoModpack, and world backups.
+- First release: Fabric or NeoForge worlds, mod JAR uploads, AutoModpack, and world backups.

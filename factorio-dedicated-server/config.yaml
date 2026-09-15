@@ -1,6 +1,6 @@
 name: "Factorio Dedicated Server"
 description: "Factorio dedicated multiplayer server (free factorio.com headless package, no SteamCMD) with auto-updates, player-aware restarts, world backups, and an Ingress status UI."
-version: "3.10.0"
+version: "3.10.1"
 slug: "factorio_dedicated_server"
 url: "https://github.com/esper256/ha-gameservers/tree/main/factorio-dedicated-server"
 # Factorio Linux headless binary is x86_64. HAOS on aarch64 will not offer this app.
@@ -26,9 +26,9 @@ ports:
 ports_description:
   34197/udp: Game port players use on this Home Assistant machine (UDP). Leave at 34197 unless that port is already taken.
 options:
-  world_name: "FamilyFactory"
+  world_name: "World"
   server_name: ""
-  server_description: "Welcome to the family Factorio server!"
+  server_description: "Welcome to the server!"
   server_password: ""
   server_slots: 10
   auto_pause: true

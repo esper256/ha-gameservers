@@ -22,7 +22,7 @@ services:
       DATA_DIR: /data/world
       STATE_DIR: /data/supervisor
       WORLD_NAME: default
-      SERVER_MOTD: Welcome to the family Hytale server!
+      SERVER_MOTD: Welcome to the server!
       SERVER_PASSWORD: changeme
       SERVER_SLOTS: "20"
       JAVA_OPTS: "-Xms2G -Xmx4G"

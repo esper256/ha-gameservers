@@ -19,7 +19,7 @@ services:
     environment:
       GAME_PLUGIN: /opt/games/game.yaml
       INSTALL_DIR: /data/game
-      WORLD_NAME: FamilyWorld
+      WORLD_NAME: World
       SERVER_PASSWORD: changeme
       SERVER_SLOTS: "10"
       PAUSE_WHEN_EMPTY: "true"

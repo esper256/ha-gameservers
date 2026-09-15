@@ -93,7 +93,7 @@ def active_world_name() -> str:
                 return value
         except (OSError, json.JSONDecodeError):
             pass
-    return env_or_option("world_name", "FamilyWorld")
+    return env_or_option("world_name", "World")
 
 
 def profile_dir(name: str | None = None) -> Path:
@@ -407,7 +407,7 @@ def cmd_prepare_world() -> int:
 
 
 def _write_server_properties(directory: Path) -> None:
-    motd = env_or_option("server_motd", "Family Minecraft")
+    motd = env_or_option("server_motd", "A Minecraft Server")
     slots = env_or_option("server_slots", "8")
     online = env_or_option("online_mode", "true").lower()
     whitelist = env_or_option("white_list", "true").lower()
@@ -881,7 +881,7 @@ def fabric_launcher_jar(install: Path, directory: Path) -> Path | None:
 
 
 def cmd_write_copyparty_banner() -> int:
-    """Kid-facing HTML on the upload folder (Copyparty has no dots perm)."""
+    """HTML banner on the mod-upload folder (Copyparty has no dots perm)."""
 
     uploaded = uploaded_mods_dir()
     uploaded.mkdir(parents=True, exist_ok=True)
@@ -891,7 +891,7 @@ def cmd_write_copyparty_banner() -> int:
 <div style="max-width:42rem;margin:1rem 0 1.25rem;padding:1rem 1.15rem;\
 background:#241c12;color:#f2e6c9;border-left:4px solid #5aad32;\
 font-family:sans-serif;line-height:1.45">
-  <strong>Family Minecraft mods</strong>
+  <strong>Minecraft mods</strong>
   <p style="margin:0.6rem 0 0">This is the <em>upload</em> folder, not the
   running server&rsquo;s copy. Drop a <code>.jar</code> to add or replace
   a mod (same mod id replaces the last build even if the filename is

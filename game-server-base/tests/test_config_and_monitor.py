@@ -2544,7 +2544,7 @@ class StatusFormatTests(unittest.TestCase):
                 "monitor": {},
                 "copyparty": {"port": 8765, "file_count": 3},
             },
-            "FamilyGame",
+            "ExampleGame",
             request_host="homeassistant.local:8123",
         )
         self.assertFalse(shown["copyparty_card_hidden"])
@@ -2558,7 +2558,7 @@ class StatusFormatTests(unittest.TestCase):
         self.assertNotIn("stat-link hidden", html)
         one = _ui_view(
             {"copyparty": {"port": 9001, "file_count": 1}},
-            "FamilyGame",
+            "ExampleGame",
         )
         self.assertEqual(one["copyparty_files"], "1 file")
         self.assertEqual(hostname_from_host_header("[fd00::1]:8123"), "[fd00::1]")

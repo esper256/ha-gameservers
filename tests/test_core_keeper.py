@@ -103,7 +103,7 @@ class CoreKeeperPluginTests(unittest.TestCase):
             backup_enabled=False,
             ha_notifications=False,
             game_options={
-                "world_name": "FamilyCore",
+                "world_name": "World",
                 "world_index": "0",
                 "world_mode": "0",
                 "world_seed": "",
