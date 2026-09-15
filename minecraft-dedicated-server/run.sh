@@ -41,8 +41,17 @@ fi
 
 python3 /opt/haos_defaults.py write-copyparty-config
 
-# Independent of the game JVM so a bad mod cannot take down uploads.
-copyparty -c "${MOD_PUBLISHER_DIR}/copyparty.conf" &
+# Independent of the game JVM: SIGHUP-proof babysitter so a crash/exec cannot
+# take down the upload page (kids delete the breaking jar from /mods/).
+mkdir -p /data/logs
+nohup bash -c '
+  while true; do
+    copyparty -c "$1" || true
+    echo "Copyparty exited; retry in 2s" >&2
+    sleep 2
+  done
+' _ "${MOD_PUBLISHER_DIR}/copyparty.conf" >>/data/logs/copyparty.log 2>&1 &
+disown $! || true
 echo "Copyparty publisher on TCP ${PUBLISHER_PORT}"
 
 exec python3 -m game_server --plugin "${GAME_PLUGIN}"

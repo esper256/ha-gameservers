@@ -2575,7 +2575,7 @@ class StatusFormatTests(unittest.TestCase):
         self.assertTrue(healthz_ok({"lifecycle": "installing"}))
         self.assertTrue(healthz_ok({"lifecycle": "waiting"}))
         self.assertTrue(healthz_ok({"ok": True}))
-        self.assertFalse(healthz_ok({"lifecycle": "failed"}))
+        self.assertTrue(healthz_ok({"lifecycle": "failed"}))
         self.assertFalse(healthz_ok({"lifecycle": "stopped"}))
         # Crash-loop used to look "starting"/healthy forever.
         self.assertFalse(healthz_ok({"running": False, "starting": False}))

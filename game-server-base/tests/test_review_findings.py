@@ -270,6 +270,41 @@ class CrashRecoveryDuringDeferredUpdateTests(unittest.TestCase):
             self.assertGreaterEqual(supervisor.process.start_count, 2)
             self.assertLess(wait_calls, 40, f"busy-looped: {wait_calls} waits")
 
+    def test_crash_loop_keeps_supervisor_alive_for_operator_restart(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            supervisor = _supervisor(root)
+            supervisor.config.restart_on_crash = False
+            script = root / "game" / "die.py"
+            script.write_text("raise SystemExit(1)\n", encoding="utf-8")
+            supervisor.plugin.executable = [sys.executable, str(script)]
+            supervisor.ensure_installed = lambda: None  # type: ignore[method-assign]
+
+            def runner() -> None:
+                with patch("signal.signal"):
+                    supervisor.run()
+
+            thread = threading.Thread(target=runner, name="supervisor-run", daemon=True)
+            thread.start()
+            deadline = time.time() + 5
+            while time.time() < deadline and supervisor.process.start_count < 1:
+                time.sleep(0.05)
+            time.sleep(0.4)
+            self.assertTrue(thread.is_alive(), "supervisor exited after the game crashed")
+            self.assertEqual(supervisor.lifecycle(), "failed")
+            self.assertTrue(supervisor.health()["ok"])
+            supervisor.request_restart(reason="operator")
+            deadline = time.time() + 5
+            while time.time() < deadline and supervisor.process.start_count < 2:
+                time.sleep(0.05)
+            self.assertGreaterEqual(supervisor.process.start_count, 2)
+            supervisor._stop.set()
+            try:
+                supervisor.process.stop(timeout=2)
+            except Exception:
+                pass
+            thread.join(timeout=8)
+
 
 class BackupResultTests(unittest.TestCase):
     def test_create_backup_result_failed_for_disk_pressure(self) -> None:

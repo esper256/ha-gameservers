@@ -1,5 +1,9 @@
 # Changelog
 
+## 3.9.0
+
+- Shared supervisor **3.9**: after a crash loop the supervisor stays up (`/healthz` stays healthy while lifecycle is `failed`) so Ingress remains usable; start the game again from the UI or a restart request. Vendored `game_server/` sync.
+
 ## 3.8.0
 
 - Shared supervisor **3.8**: Ingress world picker and create-world extra fields; in-process game restart API; optional live-backup stdin flush. World switch/create reserves the restart before changing the live world; `.`/`..` names are rejected; `/healthz` stays healthy during a planned game restart. Vendored `game_server/` sync.

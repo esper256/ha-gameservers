@@ -23,7 +23,7 @@ Open `http://<home-assistant-host>:8765/`, sign in with the publisher password. 
 
 The home page is an **inbox**. Drop a JAR to add or replace a mod (same mod id replaces the last build). After Copyparty finishes the upload handshake (~2s idle), the file is copied into `mods/` and removed from this folder — that does not mean the mod is gone. The jar must match this world’s **Minecraft version** and **loader** (1.21.1 NeoForge here, not 1.21.11). Do not upload NeoForge/Fabric installer jars; those are the world type, not a mod.
 
-**Installed mods** (`/mods/`) is the live `mods/` folder for the current world. Delete a jar there to take it off the server (not AutoModpack / Fabric API). The game restarts; relaunch Minecraft if AutoModpack asks. If a bad jar already crashed the game, delete it here.
+**Installed mods** (`/mods/`) is the live `mods/` folder for the current world. Delete a jar there to take it off the server (not AutoModpack / Fabric API). The game restarts; relaunch Minecraft if AutoModpack asks. If a bad jar already crashed the game, delete it here. The upload page stays up even when Minecraft will not start (Home Assistant must not stop the app).
 
 Do not upload AutoModpack or Fabric API — those are protected.
 
