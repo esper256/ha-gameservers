@@ -130,7 +130,6 @@ NECESSE_PLUGIN = ROOT.parent / "necesse-dedicated-server" / "games" / "game.yaml
 STATIONEERS_PLUGIN = ROOT.parent / "stationeers-dedicated-server" / "games" / "game.yaml"
 FACTORIO_PLUGIN = ROOT.parent / "factorio-dedicated-server" / "games" / "game.yaml"
 CORE_KEEPER_PLUGIN = ROOT.parent / "core-keeper-dedicated-server" / "games" / "game.yaml"
-HYTALE_PLUGIN = ROOT.parent / "hytale-dedicated-server" / "games" / "game.yaml"
 
 
 class ConfigTests(unittest.TestCase):
@@ -3783,13 +3782,12 @@ class JoinLeavePresenceUiTests(unittest.TestCase):
         return _ui_view(payload, plugin.name)
 
     def test_shipped_presence_games_keep_last_join_card(self) -> None:
-        plugins = [
-            load_plugin(NECESSE_PLUGIN),
-            load_plugin(STATIONEERS_PLUGIN),
-            load_plugin(FACTORIO_PLUGIN),
-            load_plugin(CORE_KEEPER_PLUGIN),
-            load_plugin(HYTALE_PLUGIN),
-        ]
+        plugins = []
+        for game_yaml in sorted(ROOT.parent.glob("*-dedicated-server/games/game.yaml")):
+            plugin = load_plugin(game_yaml)
+            if plugin.player_tracking_mode == "presence":
+                plugins.append(plugin)
+        self.assertGreaterEqual(len(plugins), 5)
         occupied = {
             "players_known": True,
             "player_count": 2,
