@@ -57,13 +57,14 @@ RUN pip3 install --break-system-packages --no-cache-dir 'copyparty>=1.16.0'
 
 RUN useradd -m -u 1000 -s /bin/bash gameserver \
  && mkdir -p /data/installs /data/worlds /data/logs /data/backups /data/supervisor \
-      /data/mod-publisher/incoming /opt/games \
+      /data/mod-publisher /opt/games \
  && chown -R gameserver:gameserver /data /home/gameserver \
  && rm -f /etc/machine-id /var/lib/dbus/machine-id
 
 COPY game_server /opt/game_server
 COPY games/game.yaml /opt/games/game.yaml
 COPY haos_defaults.py /opt/haos_defaults.py
+COPY golden_boot.py /opt/golden_boot.py
 COPY publish_mod.py /opt/publish_mod.py
 COPY launch_wrapper.sh /opt/launch_wrapper.sh
 COPY config.yaml /etc/hassio_app_config.yaml

@@ -1,5 +1,11 @@
 # Changelog
 
+## 3.12.0
+
+- Minecraft version on Configuration applies after the first start. Older loader installs stay on disk.
+- A proven boot (stock ready, or extra mods after a player joins) is kept as a fallback. A bad upload or pin that crashes before that boots the fallback without changing the upload folder.
+- Home Assistant can restart the add-on if even the fallback will not start.
+
 ## 3.11.0
 
 - OPEN WEB UI: Uploads card opens the drop page on the host port from the add-on Network settings.

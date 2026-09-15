@@ -372,7 +372,7 @@ def _sweep_partials(folder: Path) -> None:
             if name.endswith(".PARTIAL") or name.endswith(".partial"):
                 path.unlink(missing_ok=True)
                 continue
-            if path.suffix.lower() == ".jar" and path.stat().st_size == 0:
+            if path.stat().st_size == 0:
                 path.unlink(missing_ok=True)
         except OSError:
             continue

@@ -74,10 +74,6 @@ def worlds_dir() -> Path:
     return Path(os.environ.get("DATA_DIR") or "/data/worlds")
 
 
-def publisher_root() -> Path:
-    return Path(os.environ.get("MOD_PUBLISHER_DIR") or "/data/mod-publisher")
-
-
 def state_dir() -> Path:
     return Path(os.environ.get("STATE_DIR") or "/data/supervisor")
 
@@ -373,7 +369,7 @@ def cmd_prepare_world() -> int:
     ).strip().lower()
     if loader not in {"neoforge", "fabric"}:
         loader = "neoforge"
-    version = str(profile.get("minecraft_version") or minecraft_version())
+    version = minecraft_version()
     write_json(
         directory / "profile.json",
         {
@@ -393,7 +389,6 @@ def cmd_prepare_world() -> int:
     _link_install(directory, loader, version)
     _seed_infrastructure(directory, loader, version)
     cmd_write_copyparty_banner()
-    stage_mod_snapshot(directory)
     return 0
 
 
@@ -533,17 +528,87 @@ def _modrinth(url: str) -> Any:
         return json.loads(resp.read().decode("utf-8"))
 
 
-def cmd_run() -> int:
+def install_tree(loader: str, version: str) -> Path:
+    return install_dir() / f"{loader}-{version}"
+
+
+def install_tree_ready(loader: str, version: str) -> bool:
+    install = install_tree(loader, version)
+    if not install.is_dir():
+        return False
+    if loader == "fabric":
+        return helper_server_entry(install) is not None or (install / "server.jar").exists()
+    return (install / "server.jar").exists() or (install / "run.sh").exists()
+
+
+def prepare_game_command() -> list[str] | None:
+    """Link the chosen install, stage mods, return JVM argv (no exec)."""
+
+    from golden_boot import (
+        choose_boot_mode,
+        is_stock_uploads,
+        load_golden_meta,
+        record_attempt_state,
+        stage_golden_snapshot,
+        write_boot_session,
+    )
+
     directory = profile_dir()
     profile = read_profile(directory)
     loader = str(profile.get("loader") or "neoforge").lower()
-    version = str(profile.get("minecraft_version") or minecraft_version())
-    install = install_dir() / f"{loader}-{version}"
-    _link_install(directory, loader, version)
-    _ensure_rcon_properties(directory)
-    stage_mod_snapshot(directory)
+    if loader not in {"neoforge", "fabric"}:
+        loader = "neoforge"
+    ha_version = minecraft_version()
+    mode = choose_boot_mode(directory, ha_version=ha_version, loader=loader)
+    stock = is_stock_uploads(directory)
+    if mode == "golden":
+        meta = load_golden_meta(directory)
+        if meta is None:
+            mode = "attempt"
+    if mode == "golden":
+        assert meta is not None
+        loader = str(meta.get("loader") or loader)
+        version = str(meta.get("minecraft_version") or ha_version)
+        if not install_tree_ready(loader, version):
+            print(
+                f"Golden install missing: {install_tree(loader, version)}",
+                file=sys.stderr,
+            )
+            return None
+        _link_install(directory, loader, version)
+        _ensure_rcon_properties(directory)
+        stage_golden_snapshot(directory)
+        write_boot_session(
+            directory,
+            mode="golden",
+            loader=loader,
+            minecraft_version=version,
+            stock=bool(meta.get("stock")),
+            proven=True,
+        )
+    else:
+        version = ha_version
+        if not install_tree_ready(loader, version):
+            print(
+                f"Install tree missing for Minecraft {version} ({loader}): "
+                f"{install_tree(loader, version)}",
+                file=sys.stderr,
+            )
+            return None
+        record_attempt_state(directory, ha_version=ha_version, loader=loader)
+        _link_install(directory, loader, version)
+        _ensure_rcon_properties(directory)
+        stage_mod_snapshot(directory)
+        write_boot_session(
+            directory,
+            mode="attempt",
+            loader=loader,
+            minecraft_version=version,
+            stock=stock,
+            proven=False,
+        )
+    install = install_tree(loader, version)
     java_opts = env_or_option("java_opts", "-Xms2G -Xmx4G")
-    os.chdir(directory)
     cmd = ["java", *java_opts.split()]
     if loader == "fabric":
         launch = fabric_launcher_jar(install, directory)
@@ -552,14 +617,23 @@ def cmd_run() -> int:
                 "Missing Fabric launcher (install results SERVER=)",
                 file=sys.stderr,
             )
-            return 1
+            return None
         cmd += ["-jar", str(launch), "nogui"]
     else:
         starter = directory / "server.jar"
         if not starter.exists():
             print("Missing NeoForge server.jar", file=sys.stderr)
-            return 1
+            return None
         cmd += ["-jar", str(starter), "nogui"]
+    return cmd
+
+
+def cmd_run() -> int:
+    directory = profile_dir()
+    cmd = prepare_game_command()
+    if cmd is None:
+        return 1
+    os.chdir(directory)
     os.execvp(cmd[0], cmd)
     return 1
 
@@ -837,6 +911,9 @@ def cmd_status_probe() -> int:
         if "player_count" not in findings and "player_count" in status:
             findings["player_count"] = status["player_count"]
     print(json.dumps(findings, separators=(",", ":")), flush=True)
+    from golden_boot import apply_probe_findings
+
+    apply_probe_findings(directory, findings)
     return 0
 
 
@@ -887,7 +964,7 @@ font-family:sans-serif;line-height:1.45">
   a mod (same mod id replaces the last build even if the filename is
   different). Delete a jar to take it off next restart (not AutoModpack).
   Use a build for this world&rsquo;s Minecraft version and loader
-  (1.21.1 NeoForge unless you created a Fabric world).</p>
+  (the pin on Configuration, Fabric or NeoForge per world).</p>
   <p style="margin:0.6rem 0 0">The game keeps the last launch snapshot
   until it restarts. If anyone is playing, it waits until the last
   player leaves, then restarts. Then relaunch Minecraft if AutoModpack
@@ -907,9 +984,7 @@ def main(argv: list[str]) -> int:
         "prepare-world": cmd_prepare_world,
         "run": cmd_run,
         "write-copyparty-banner": cmd_write_copyparty_banner,
-        "write-copyparty-config": cmd_write_copyparty_banner,
         "status-probe": cmd_status_probe,
-        "player-count": cmd_status_probe,
     }
     if cmd not in handlers:
         print(

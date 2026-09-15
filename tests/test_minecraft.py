@@ -58,7 +58,15 @@ class MinecraftPluginTests(unittest.TestCase):
         self.assertIsNotNone(plugin.world_create)
         self.assertEqual(plugin.world_create.fields[0].id, "mod_loader")
         self.assertEqual(plugin.ui_theme.get("accent"), "#5aad32")
-        self.assertTrue(plugin.hold_on_crash_loop)
+        self.assertFalse(plugin.hold_on_crash_loop)
+        import yaml
+
+        cfg = yaml.safe_load(
+            (ROOT / "minecraft-dedicated-server" / "config.yaml").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertIn("healthz", str(cfg.get("watchdog") or ""))
         self.assertTrue(plugin.restart_when_empty)
         assert plugin.copyparty is not None
         self.assertEqual(plugin.copyparty.port, 8765)
@@ -139,6 +147,8 @@ class PublishModTests(unittest.TestCase):
             self.assertEqual(
                 publish_mod.inspect_jar(dest)["mod_id"], "cool_creepers"
             )
+            self.assertEqual(publish_mod.rollback("cool_creepers"), 0)
+            self.assertTrue(dest.is_file())
 
     def test_publish_from_stdin_skips_partial(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -351,6 +361,22 @@ class PublishModTests(unittest.TestCase):
                 haos_defaults.sealed_jars = real_sealed  # type: ignore[method-assign]
             self.assertFalse((world / "mods" / "cool_creepers.jar").exists())
             self.assertEqual((world / "mods" / "jade.jar").read_bytes(), b"kept-payload")
+
+    def test_stage_clears_leftover_mods_next(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            world = Path(tmp) / "World"
+            uploaded = world / "uploaded_mods"
+            nxt = world / "mods.next"
+            nxt.mkdir(parents=True)
+            (nxt / "stale.jar").write_bytes(b"stale")
+            uploaded.mkdir(parents=True)
+            src = uploaded / "cool_creepers.jar"
+            src.write_bytes(b"fresh")
+            os.chmod(src, 0o444)
+            haos_defaults.stage_mod_snapshot(world)
+            self.assertFalse(nxt.exists())
+            self.assertEqual((world / "mods" / "cool_creepers.jar").read_bytes(), b"fresh")
+            self.assertFalse((world / "mods" / "stale.jar").exists())
 
 
 class LaunchLinkTests(unittest.TestCase):
