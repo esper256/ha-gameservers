@@ -98,7 +98,7 @@ class CopypartyPublisherTests(unittest.TestCase):
         self.assertIsNone(plugin.copyparty)
         self.assertFalse(plugin.hold_on_crash_loop)
         self.assertFalse(plugin.restart_when_empty)
-        self.assertIsNone(plugin.player_probe)
+        self.assertIsNone(plugin.status_probe)
 
 
 if __name__ == "__main__":
