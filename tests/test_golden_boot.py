@@ -99,6 +99,7 @@ class GoldenBootContractTests(unittest.TestCase):
             "MOD_PUBLISHER_DIR",
             "SERVER_PORT",
             "OPTIONS_FILE",
+            "SUPERVISOR_TOKEN",
         ):
             os.environ.pop(key, None)
 
