@@ -15,7 +15,7 @@ Accept the Minecraft EULA (the **EULA** option, default on). Mojang requires thi
 
 ## OPEN WEB UI
 
-World switch/create, backups, restore, status. Home Assistant Ingress — no extra host port. Switching worlds restarts Minecraft only; the upload page stays up.
+World switch/create, backups, restore, status. Home Assistant Ingress — no extra host port. The **Uploads** card shows how many files are in the drop folder and opens the Copyparty page on the mapped LAN port. Switching worlds restarts Minecraft only; the upload page stays up.
 
 ## Kid uploads
 

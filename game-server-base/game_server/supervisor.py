@@ -680,6 +680,7 @@ class GameServerSupervisor:
             "backups": self.backups.to_dict(),
             "log_captures": self.log_tools.list_captures(),
             "operator_action": action,
+            "copyparty": self._publisher.ui_status(),
         }
 
     def _publish_status(self) -> None:

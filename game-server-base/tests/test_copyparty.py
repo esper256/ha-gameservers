@@ -93,6 +93,46 @@ class CopypartyPublisherTests(unittest.TestCase):
             self.assertIn("python3", upload)
             self.assertIn("/opt/publish_mod.py", upload)
 
+    def test_ui_status_counts_visible_files(self) -> None:
+        from game_server.copyparty import count_visible_files
+
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp)
+            (folder / "cool_creepers.jar").write_bytes(b"jar")
+            (folder / "jade.jar").write_bytes(b"jar")
+            (folder / ".prologue.html").write_text("hi", encoding="utf-8")
+            (folder / "skip.jar.PARTIAL").write_bytes(b"x")
+            (folder / "nested").mkdir()
+            self.assertEqual(count_visible_files(folder), 2)
+            self.assertEqual(count_visible_files(folder / "missing"), 0)
+            spec = CopypartySpec.from_dict(
+                {"port": 8765, "root": "{data_dir}/{world_name}/uploaded_mods"}
+            )
+            data = folder / "worlds"
+            drop = data / "FamilyWorld" / "uploaded_mods"
+            drop.mkdir(parents=True)
+            (drop / "cool_creepers.jar").write_bytes(b"jar")
+            publisher = CopypartyPublisher(
+                spec,
+                state_dir=str(folder / "state"),
+                data_dir=str(data),
+                options={"world_name": "FamilyWorld"},
+                world_name="FamilyWorld",
+            )
+            self.assertEqual(
+                publisher.ui_status(),
+                {"port": 8765, "file_count": 1},
+            )
+            self.assertIsNone(
+                CopypartyPublisher(
+                    None,
+                    state_dir=str(folder / "state"),
+                    data_dir=str(data),
+                    options={},
+                    world_name="FamilyWorld",
+                ).ui_status()
+            )
+
     def test_example_plugin_has_no_copyparty(self) -> None:
         plugin = load_plugin(FIXTURE)
         self.assertIsNone(plugin.copyparty)

@@ -82,7 +82,9 @@ from game_server.status_http import (  # noqa: E402
     _log_pattern_prompt,
     _ui_view,
     canonical_peer,
+    copyparty_lan_href,
     healthz_ok,
+    hostname_from_host_header,
     peer_is_allowed,
     render_status_html,
     resolve_ui_theme,
@@ -2175,6 +2177,9 @@ class StatusFormatTests(unittest.TestCase):
         # Default (no debug_mode): log-watch hidden; players hidden without tracking.
         self.assertTrue(view["log_watch_hidden"])
         self.assertTrue(view["players_card_hidden"])
+        self.assertTrue(view["copyparty_card_hidden"])
+        self.assertIn('id="card-copyparty"', html)
+        self.assertIn("stat-link hidden", html)
 
     def test_status_http_get_index_returns_200(self) -> None:
         """Live HTTP GET / — same path Ingress hits on OPEN WEB UI."""
@@ -2523,6 +2528,44 @@ class StatusFormatTests(unittest.TestCase):
         )
         self.assertIn("--accent: #d4a25a", html)
         self.assertIn("#243f33", html)
+
+    def test_copyparty_hero_card_only_when_enabled(self) -> None:
+        hidden = _ui_view(
+            {"running": True, "lifecycle": "running", "monitor": {}},
+            "Necesse",
+        )
+        self.assertTrue(hidden["copyparty_card_hidden"])
+        self.assertEqual(hidden["copyparty_card_class"], "hidden")
+        self.assertEqual(hidden["copyparty_href"], "#")
+        shown = _ui_view(
+            {
+                "running": True,
+                "lifecycle": "running",
+                "monitor": {},
+                "copyparty": {"port": 8765, "file_count": 3},
+            },
+            "FamilyGame",
+            request_host="homeassistant.local:8123",
+        )
+        self.assertFalse(shown["copyparty_card_hidden"])
+        self.assertEqual(shown["copyparty_files"], "3 files")
+        self.assertEqual(shown["copyparty_port"], "8765")
+        self.assertEqual(shown["copyparty_href"], "http://homeassistant.local:8765/")
+        html = render_status_html(shown)
+        self.assertIn('id="card-copyparty"', html)
+        self.assertIn("3 files", html)
+        self.assertIn("http://homeassistant.local:8765/", html)
+        self.assertNotIn("stat-link hidden", html)
+        one = _ui_view(
+            {"copyparty": {"port": 9001, "file_count": 1}},
+            "FamilyGame",
+        )
+        self.assertEqual(one["copyparty_files"], "1 file")
+        self.assertEqual(hostname_from_host_header("[fd00::1]:8123"), "[fd00::1]")
+        self.assertEqual(
+            copyparty_lan_href(8765, "[fd00::1]:8123"),
+            "http://[fd00::1]:8765/",
+        )
 
     def test_fmt_ago(self) -> None:
         now = 1_700_000_000.0
