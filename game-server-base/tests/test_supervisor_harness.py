@@ -148,8 +148,8 @@ class SupervisorHarnessTests(unittest.TestCase):
             script = root / "game" / "die.py"
             script.write_text("raise SystemExit(1)\n", encoding="utf-8")
             supervisor.plugin.executable = [sys.executable, str(script)]
-            supervisor.plugin.hold_on_crash_loop = True
-            supervisor.config.restart_on_crash = False
+            supervisor.config.restart_on_crash = True
+            supervisor.config.crash_restart_delay_seconds = 0
             supervisor.ensure_installed = lambda: None  # type: ignore[method-assign]
             env = {**os.environ, "PATH": f"{bin_dir}:{os.environ.get('PATH', '')}"}
             with patch.dict(os.environ, env, clear=False):

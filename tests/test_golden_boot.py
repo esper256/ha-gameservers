@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import tempfile
 import unittest
 from pathlib import Path
@@ -258,6 +259,38 @@ class GoldenBootContractTests(unittest.TestCase):
             self.assertEqual(publish_mod.publish(incoming), 0)
             self.assertTrue((world / "attempt.request").is_file())
 
+    def test_golden_preserves_jvm_snapshot_not_later_uploads(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            world = self._env(Path(tmp))
+            uploaded = world / "uploaded_mods"
+            uploaded.mkdir(parents=True)
+            _jar(uploaded / "cool_creepers.jar", fabric=False)
+            haos_defaults.prepare_game_command()
+            self.assertTrue((world / "mods" / "cool_creepers.jar").is_file())
+            _jar(uploaded / "jade.jar", fabric=False, mod_id="jade")
+            self._probe(ready=True, player_count=1)
+            self.assertTrue(_has_golden(world))
+            self.assertTrue((world / "golden_mods" / "cool_creepers.jar").is_file())
+            self.assertFalse((world / "golden_mods" / "jade.jar").exists())
+            self.assertTrue((uploaded / "jade.jar").is_file())
+            self.assertFalse((world / "mods.prev").exists())
+
+    def test_missing_golden_install_falls_back_to_attempt(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            world = self._env(Path(tmp))
+            (world / "uploaded_mods").mkdir(parents=True)
+            haos_defaults.prepare_game_command()
+            self._probe(ready=True)
+            self.assertTrue(_has_golden(world))
+            os.environ["MINECRAFT_VERSION"] = "1.21.11"
+            haos_defaults.prepare_game_command()
+            self.assertEqual(_boot_mode(world), "attempt")
+            shutil.rmtree(Path(os.environ["INSTALL_DIR"]) / "neoforge-1.21.1")
+            cmd = haos_defaults.prepare_game_command()
+            self.assertIsNotNone(cmd)
+            self.assertEqual(_boot_mode(world), "attempt")
+            self.assertTrue((world / "server.jar").exists())
+
     def test_minecraft_only_state_no_supervisor_golden_api(self) -> None:
         base = ROOT / "game-server-base"
         hits = []
@@ -277,7 +310,7 @@ class GoldenBootContractTests(unittest.TestCase):
     def test_restored_golden_crashloop_fails_healthz_contract(self) -> None:
         plugin = (MC / "games" / "game.yaml").read_text(encoding="utf-8")
         cfg = (MC / "config.yaml").read_text(encoding="utf-8")
-        self.assertIn("hold_on_crash_loop: false", plugin)
+        self.assertNotIn("hold_on_crash_loop", plugin)
         self.assertIn("healthz", cfg)
 
 

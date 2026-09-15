@@ -69,14 +69,14 @@ Copy the closest sibling (`necesse-dedicated-server/` for SteamCMD + simple flag
 
    **Version scheme:** `{supervisor_major}.{supervisor_minor}.{game_patch}`.
    The shared supervisor advertises major.minor in `game_server/version.py`
-   (`SUPERVISOR_VERSION`, currently `3.12`). Each game `config.yaml` is that
-   plus a patch (`3.12.0` for the first release on supervisor 3.12).
+   (`SUPERVISOR_VERSION`, currently `3.13`). Each game `config.yaml` is that
+   plus a patch (`3.13.0` for the first release on supervisor 3.13).
 
-   - Supervisor change → bump `SUPERVISOR_VERSION` (e.g. `3.11` → `3.12`) **and**
-     set **every** game add-on to `{new}.0` (`3.12.0`) so users see them all
+   - Supervisor change → bump `SUPERVISOR_VERSION` (e.g. `3.12` → `3.13`) **and**
+     set **every** game add-on to `{new}.0` (`3.13.0`) so users see them all
      update together.
    - Game-only fix (no supervisor change) → bump that game’s patch only
-     (`3.12.0` → `3.12.1`). Leave other games and `SUPERVISOR_VERSION` alone.
+     (`3.13.0` → `3.13.1`). Leave other games and `SUPERVISOR_VERSION` alone.
 
 **Copy `run.sh`’s `export SERVER_PORT=…` when HA publishes a container port the game must bind** (Necesse, Factorio, Stationeers, Core Keeper Direct Connect). The Network UI remaps the *host* port; the process still has to listen on the container port in `config.yaml`. Do **not** set `host_network: true`. Titles that join only through a relay with no listen port can omit it — Core Keeper is not that case: Direct Connect (`-port`) is the default, and Steam Game ID join still works alongside it.
 
@@ -195,7 +195,6 @@ Point the container at your plugin with `GAME_PLUGIN` (Necesse’s `run.sh` does
 | `status_probe` | Optional argv that prints one JSON object of live status fields (`player_count`, `ready`, `game_version`, `players`). Peer to `log_patterns`: include only keys you can assert this tick; omit a key (or print `{}`) to yield nothing for that field. `null` is omit, not 0. Invalid JSON / non-zero exit applies nothing. Do not invent defaults. |
 | `restart_when_empty` | Delay a pending game restart until occupancy is a **known** 0 (from logs and/or `status_probe`) or the process is down. Unknown occupancy waits. World switch/create still restart immediately. Do not set this unless something can honestly report empty. |
 | `copyparty` | Optional file-drop: unique `port` and `root` template aimed at a live mods (or similar) directory. The supervisor writes Copyparty config and keeps the process up across game crashes and world switches. Game-layer hook argv (`before_upload`, `after_idle_upload`, `before_delete`, `after_delete`) validate and rename files. Not a generic sidecar runner. Ingress shows an **Uploads** hero card (file count) that opens `http://<home-assistant-host>:<port>/`. |
-| `hold_on_crash_loop` | Stay in the supervisor loop after the crash budget so Ingress (and Copyparty) keep running. `/healthz` is still **not** healthy while lifecycle is `failed`. Omit the HA add-on `watchdog` on titles that use this; other games keep the watchdog. |
 
 Shape reference: `game-server-base/tests/fixtures/example.game.yaml`
 
