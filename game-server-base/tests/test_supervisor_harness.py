@@ -170,6 +170,102 @@ class SupervisorHarnessTests(unittest.TestCase):
                     self.assertEqual((status.get("copyparty") or {}).get("port"), 19999)
                     _stop_supervisor(supervisor, thread)
 
+    def test_status_copyparty_port_mapped_disabled_or_missing_token(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            supervisor = _supervisor(root)
+            drop = root / "world" / "drop"
+            drop.mkdir(parents=True)
+            supervisor.plugin.copyparty = CopypartySpec.from_dict(
+                {"port": 8765, "root": "{data_dir}/drop"}
+            )
+            supervisor._publisher._spec = supervisor.plugin.copyparty
+            supervisor._publisher._data_dir = str(root / "world")
+            supervisor._publisher._world_name = "World"
+            with patch(
+                "game_server.copyparty.fetch_addon_network",
+                return_value={"8765/tcp": 19999},
+            ):
+                supervisor._publisher._network_cache = None
+                self.assertEqual(supervisor.status()["copyparty"]["port"], 19999)
+            with patch("game_server.copyparty.fetch_addon_network", return_value=None):
+                supervisor._publisher._network_cache = None
+                self.assertEqual(supervisor.status()["copyparty"]["port"], 8765)
+            with patch(
+                "game_server.copyparty.fetch_addon_network",
+                return_value={"8765/tcp": None},
+            ):
+                supervisor._publisher._network_cache = None
+                self.assertIsNone(supervisor.status().get("copyparty"))
+
+    def test_reload_for_world_retargets_root(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            supervisor = _supervisor(root)
+            first = root / "world" / "Family" / "drop"
+            second = root / "world" / "Creative" / "drop"
+            first.mkdir(parents=True)
+            second.mkdir(parents=True)
+            supervisor.plugin.copyparty = CopypartySpec.from_dict(
+                {"port": 8765, "root": "{data_dir}/{world_name}/drop"}
+            )
+            supervisor._publisher._spec = supervisor.plugin.copyparty
+            supervisor._publisher._data_dir = str(root / "world")
+            supervisor._publisher._world_name = "Family"
+            self.assertEqual(supervisor._publisher.expanded_root(), first)
+            supervisor._publisher.reload_for_world(
+                "Creative", supervisor.config.game_options
+            )
+            self.assertEqual(supervisor._publisher.expanded_root(), second)
+
+    def test_copyparty_reaper_respawns_after_stub_exit(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            supervisor = _supervisor(root)
+            bin_dir = root / "bin"
+            bin_dir.mkdir()
+            stub = bin_dir / "copyparty"
+            alive = root / "copyparty.alive"
+            stub.write_text(
+                "#!/usr/bin/env python3\n"
+                "import pathlib, sys, time, signal\n"
+                f"path = pathlib.Path({str(alive)!r})\n"
+                "n = int(path.read_text() or '0') if path.exists() else 0\n"
+                "path.write_text(str(n + 1))\n"
+                "signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))\n"
+                "if n == 0:\n"
+                "    sys.exit(0)\n"
+                "while True:\n"
+                "    time.sleep(0.2)\n",
+                encoding="utf-8",
+            )
+            stub.chmod(stub.stat().st_mode | stat.S_IEXEC)
+            data = root / "world"
+            data.mkdir(exist_ok=True)
+            supervisor.plugin.copyparty = CopypartySpec.from_dict(
+                {"port": 8765, "root": "{data_dir}/drop"}
+            )
+            supervisor._publisher._spec = supervisor.plugin.copyparty
+            supervisor._publisher._data_dir = str(data)
+            supervisor._publisher._world_name = "World"
+            script = root / "game" / "sleep.py"
+            script.write_text("import time\ntime.sleep(30)\n", encoding="utf-8")
+            supervisor.plugin.executable = [sys.executable, str(script)]
+            supervisor.ensure_installed = lambda: None  # type: ignore[method-assign]
+            env = {**os.environ, "PATH": f"{bin_dir}:{os.environ.get('PATH', '')}"}
+            with patch.dict(os.environ, env, clear=False):
+                thread = _run_supervisor(supervisor)
+                deadline = time.time() + 12
+                while time.time() < deadline:
+                    try:
+                        if int(alive.read_text().strip() or "0") >= 2:
+                            break
+                    except (OSError, ValueError):
+                        pass
+                    time.sleep(0.1)
+                self.assertGreaterEqual(int(alive.read_text().strip()), 2)
+                _stop_supervisor(supervisor, thread)
+
     def test_example_plugin_unchanged(self) -> None:
         plugin = load_plugin(FIXTURE)
         self.assertIsNone(plugin.copyparty)

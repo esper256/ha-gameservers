@@ -3,14 +3,17 @@
 
 from __future__ import annotations
 
+import errno
 import json
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
 import zipfile
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 PLUGIN = ROOT / "minecraft-dedicated-server" / "games" / "game.yaml"
@@ -58,7 +61,7 @@ class MinecraftPluginTests(unittest.TestCase):
         self.assertIsNotNone(plugin.world_create)
         self.assertEqual(plugin.world_create.fields[0].id, "mod_loader")
         self.assertEqual(plugin.ui_theme.get("accent"), "#5aad32")
-        self.assertFalse(plugin.hold_on_crash_loop)
+        self.assertTrue(plugin.hold_on_crash_loop)
         import yaml
 
         cfg = yaml.safe_load(
@@ -66,7 +69,7 @@ class MinecraftPluginTests(unittest.TestCase):
                 encoding="utf-8"
             )
         )
-        self.assertIn("healthz", str(cfg.get("watchdog") or ""))
+        self.assertFalse(cfg.get("watchdog"))
         self.assertTrue(plugin.restart_when_empty)
         assert plugin.copyparty is not None
         self.assertEqual(plugin.copyparty.port, 8765)
@@ -150,7 +153,7 @@ class PublishModTests(unittest.TestCase):
             self.assertEqual(publish_mod.rollback("cool_creepers"), 0)
             self.assertTrue(dest.is_file())
 
-    def test_publish_from_stdin_skips_partial(self) -> None:
+    def test_publish_paths_skips_partial(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             worlds = root / "worlds" / "World"
@@ -377,6 +380,260 @@ class PublishModTests(unittest.TestCase):
             self.assertFalse(nxt.exists())
             self.assertEqual((world / "mods" / "cool_creepers.jar").read_bytes(), b"fresh")
             self.assertFalse((world / "mods" / "stale.jar").exists())
+
+    def test_hardlink_stage_isolates_replaced_upload(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            world = Path(tmp) / "World"
+            uploaded = world / "uploaded_mods"
+            uploaded.mkdir(parents=True)
+            src = uploaded / "cool_creepers.jar"
+            src.write_bytes(b"sealed-payload")
+            os.chmod(src, 0o444)
+            with patch.object(haos_defaults, "_try_reflink", return_value=False):
+                haos_defaults.stage_mod_snapshot(world)
+            staged = world / "mods" / "cool_creepers.jar"
+            self.assertEqual(staged.stat().st_ino, src.stat().st_ino)
+            src.unlink()
+            src.write_bytes(b"truncated-or-replaced")
+            self.assertEqual(staged.read_bytes(), b"sealed-payload")
+
+    def test_stage_copy_fallback_isolates_truncate(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            world = Path(tmp) / "World"
+            uploaded = world / "uploaded_mods"
+            uploaded.mkdir(parents=True)
+            src = uploaded / "cool_creepers.jar"
+            src.write_bytes(b"sealed-payload")
+            os.chmod(src, 0o444)
+
+            def boom(*_args: object, **_kwargs: object) -> None:
+                raise OSError(errno.EXDEV, "cross-device")
+
+            with patch.object(haos_defaults, "_try_reflink", return_value=False):
+                with patch.object(os, "link", side_effect=boom):
+                    haos_defaults.stage_mod_snapshot(world)
+            staged = world / "mods" / "cool_creepers.jar"
+            os.chmod(src, 0o644)
+            with open(src, "wb") as handle:
+                handle.truncate(0)
+            self.assertEqual(staged.read_bytes(), b"sealed-payload")
+
+    def test_rollback_prunes_history(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            worlds = root / "worlds" / "World"
+            worlds.mkdir(parents=True)
+            (worlds / "profile.json").write_text(
+                json.dumps({"loader": "neoforge", "minecraft_version": "1.21.1"}),
+                encoding="utf-8",
+            )
+            publisher = root / "publisher"
+            os.environ["DATA_DIR"] = str(root / "worlds")
+            os.environ["STATE_DIR"] = str(root / "state")
+            os.environ["MOD_PUBLISHER_DIR"] = str(publisher)
+            Path(os.environ["STATE_DIR"]).mkdir(parents=True, exist_ok=True)
+            keep = publish_mod.HISTORY_KEEP
+            publish_mod.HISTORY_KEEP = 2
+            try:
+                for i in range(4):
+                    drop = root / f"drop-{i}.jar"
+                    _jar(drop, fabric=False, mod_id="jade")
+                    self.assertEqual(publish_mod.publish(drop), 0)
+                hist = list((publisher / "history" / "jade").glob("*/artifact.jar"))
+                self.assertEqual(len(hist), 2)
+                dest = worlds / "uploaded_mods" / "jade.jar"
+                self.assertEqual(publish_mod.rollback("jade"), 0)
+                self.assertTrue(dest.is_file())
+            finally:
+                publish_mod.HISTORY_KEEP = keep
+
+    def test_client_only_jar_goes_to_host_modpack(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            worlds = root / "worlds" / "World"
+            worlds.mkdir(parents=True)
+            (worlds / "profile.json").write_text(
+                json.dumps({"loader": "fabric", "minecraft_version": "1.21.1"}),
+                encoding="utf-8",
+            )
+            os.environ["DATA_DIR"] = str(root / "worlds")
+            os.environ["STATE_DIR"] = str(root / "state")
+            os.environ["MOD_PUBLISHER_DIR"] = str(root / "publisher")
+            Path(os.environ["STATE_DIR"]).mkdir(parents=True, exist_ok=True)
+            Path(os.environ["MOD_PUBLISHER_DIR"]).mkdir(parents=True, exist_ok=True)
+            drop = root / "minimap.jar"
+            with zipfile.ZipFile(drop, "w") as zf:
+                zf.writestr(
+                    "fabric.mod.json",
+                    json.dumps(
+                        {
+                            "id": "minimap",
+                            "version": "0.0.1",
+                            "name": "minimap",
+                            "environment": "client",
+                        }
+                    ),
+                )
+            self.assertEqual(publish_mod.publish(drop), 0)
+            packed = (
+                worlds
+                / "automodpack"
+                / "host-modpack"
+                / "main"
+                / "mods"
+                / "minimap.jar"
+            )
+            self.assertTrue(packed.is_file())
+            self.assertFalse((worlds / "uploaded_mods" / "minimap.jar").exists())
+
+    def test_generated_hooks_guard_publish_and_delete(self) -> None:
+        from game_server.active_world import restart_request_path
+        from game_server.copyparty import CopypartyPublisher, CopypartySpec
+
+        pub = str(MC / "publish_mod.py")
+        py = sys.executable
+        spec = CopypartySpec.from_dict(
+            {
+                "port": 8765,
+                "root": "{data_dir}/{world_name}/uploaded_mods",
+                "before_upload": [py, pub, "--guard-upload"],
+                "after_idle_upload": [py, pub],
+                "before_delete": [py, pub, "--guard-delete"],
+                "after_delete": [py, pub, "--after-delete"],
+            }
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            data = root / "worlds"
+            uploaded = data / "World" / "uploaded_mods"
+            uploaded.mkdir(parents=True)
+            os.environ["DATA_DIR"] = str(data)
+            os.environ["STATE_DIR"] = str(root / "state")
+            os.environ["MOD_PUBLISHER_DIR"] = str(root / "publisher")
+            Path(os.environ["STATE_DIR"]).mkdir(parents=True, exist_ok=True)
+            Path(os.environ["MOD_PUBLISHER_DIR"]).mkdir(parents=True, exist_ok=True)
+            (data / "World" / "profile.json").write_text(
+                json.dumps({"loader": "neoforge", "minecraft_version": "1.21.1"}),
+                encoding="utf-8",
+            )
+            publisher = CopypartyPublisher(
+                spec,
+                state_dir=str(root / "state"),
+                data_dir=str(data),
+                options={"publisher_password": "secret", "world_name": "World"},
+                world_name="World",
+            )
+            publisher._write_config()
+            hooks = root / "state" / "copyparty"
+            hook_env = {
+                **os.environ,
+                "PYTHONPATH": os.pathsep.join(
+                    [str(MC), str(BASE), os.environ.get("PYTHONPATH", "")]
+                ),
+            }
+            protected = uploaded / "automodpack.jar"
+            _jar(protected, fabric=False, mod_id="automodpack")
+            deny = subprocess.run(
+                [str(hooks / "on-upload-guard.sh"), str(protected)],
+                check=False,
+                env=hook_env,
+            )
+            self.assertNotEqual(deny.returncode, 0)
+            drop = uploaded / "cool-creepers-1.jar"
+            allow = subprocess.run(
+                [str(hooks / "on-upload-guard.sh"), str(drop)],
+                check=False,
+                env=hook_env,
+            )
+            self.assertEqual(allow.returncode, 0)
+            _jar(drop, fabric=False)
+            published = subprocess.run(
+                [str(hooks / "on-upload.sh"), str(drop)],
+                check=False,
+                env=hook_env,
+            )
+            self.assertEqual(published.returncode, 0)
+            canonical = uploaded / "cool_creepers.jar"
+            self.assertTrue(canonical.is_file())
+            self.assertFalse(drop.exists())
+            extra = uploaded / "cool_creepers.jar"
+            gone = subprocess.run(
+                [str(hooks / "on-delete.sh"), str(extra)],
+                check=False,
+                env=hook_env,
+            )
+            self.assertEqual(gone.returncode, 0)
+            self.assertTrue(restart_request_path(root / "state").is_file())
+
+
+class HaVersionPinTests(unittest.TestCase):
+    def tearDown(self) -> None:
+        for key in (
+            "DATA_DIR",
+            "STATE_DIR",
+            "INSTALL_DIR",
+            "MINECRAFT_VERSION",
+            "JAVA_OPTS",
+        ):
+            os.environ.pop(key, None)
+
+    def _env(self, tmp: Path, version: str = "1.21.1") -> Path:
+        worlds = tmp / "worlds"
+        world = worlds / "World"
+        world.mkdir(parents=True)
+        installs = tmp / "installs"
+        os.environ["DATA_DIR"] = str(worlds)
+        os.environ["STATE_DIR"] = str(tmp / "state")
+        os.environ["INSTALL_DIR"] = str(installs)
+        os.environ["MINECRAFT_VERSION"] = version
+        os.environ["JAVA_OPTS"] = "-Xms32M"
+        Path(os.environ["STATE_DIR"]).mkdir(parents=True, exist_ok=True)
+        for ver in ("1.21.1", "1.21.11"):
+            inst = installs / f"neoforge-{ver}"
+            inst.mkdir(parents=True)
+            (inst / "server.jar").write_bytes(b"starter")
+            (inst / "run.sh").write_text("#!/bin/sh\n", encoding="utf-8")
+        (world / "profile.json").write_text(
+            json.dumps({"loader": "neoforge", "minecraft_version": "1.21.1"}),
+            encoding="utf-8",
+        )
+        uploaded = world / "uploaded_mods"
+        uploaded.mkdir(parents=True)
+        (uploaded / "cool_creepers.jar").write_bytes(b"mod")
+        os.chmod(uploaded / "cool_creepers.jar", 0o444)
+        return world
+
+    def test_prepare_and_run_attempt_the_ha_pin(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            world = self._env(Path(tmp), "1.21.11")
+            with patch.object(haos_defaults, "_seed_infrastructure", return_value=None):
+                self.assertEqual(haos_defaults.cmd_prepare_world(), 0)
+            profile = json.loads((world / "profile.json").read_text(encoding="utf-8"))
+            self.assertEqual(profile["minecraft_version"], "1.21.11")
+            self.assertEqual(profile["loader"], "neoforge")
+            self.assertFalse((world / "mods").exists())
+            cmd = haos_defaults.prepare_game_command()
+            self.assertIsNotNone(cmd)
+            self.assertTrue((world / "server.jar").exists())
+            self.assertTrue((Path(os.environ["INSTALL_DIR"]) / "neoforge-1.21.1").is_dir())
+            self.assertTrue((Path(os.environ["INSTALL_DIR"]) / "neoforge-1.21.11").is_dir())
+            self.assertEqual((world / "mods" / "cool_creepers.jar").read_bytes(), b"mod")
+
+    def test_unchanged_pin_keeps_loader(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            world = self._env(Path(tmp), "1.21.1")
+            with patch.object(haos_defaults, "_seed_infrastructure", return_value=None):
+                self.assertEqual(haos_defaults.cmd_prepare_world(), 0)
+            profile = json.loads((world / "profile.json").read_text(encoding="utf-8"))
+            self.assertEqual(profile["loader"], "neoforge")
+            self.assertEqual(profile["minecraft_version"], "1.21.1")
+
+    def test_missing_install_fails_clearly(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            self._env(Path(tmp), "1.99.9")
+            os.environ["MINECRAFT_VERSION"] = "1.99.9"
+            cmd = haos_defaults.prepare_game_command()
+            self.assertIsNone(cmd)
 
 
 class LaunchLinkTests(unittest.TestCase):

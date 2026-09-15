@@ -4,7 +4,7 @@ configuration:
     description: Default world profile folder (Open Web UI can switch/create more).
   minecraft_version:
     name: Minecraft version
-    description: Pinned Java edition version (example 1.21.1). Changing this reinstalls loaders.
+    description: Pinned Java edition version (examples 1.21.1, 1.21.11). Changing this installs that pin beside any previous loader tree.
   server_motd:
     name: MOTD
     description: Message of the day in server.properties.

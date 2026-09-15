@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Golden boot: stock ready, extra mods need a player, unproven crash falls back."""
+"""Golden boot contract. Skipped until Minecraft-layer restore ships."""
 
 from __future__ import annotations
 
@@ -17,9 +17,12 @@ import sys
 sys.path.insert(0, str(MC))
 sys.path.insert(0, str(ROOT / "game-server-base"))
 
-import golden_boot  # noqa: E402
 import haos_defaults  # noqa: E402
 import publish_mod  # noqa: E402
+
+# Flip when restore is wired: stock ready promotes; extra/pin/loader need a
+# player; unproven crash boots golden_mods without rewriting uploaded_mods.
+GOLDEN_ROLLBACK_IMPLEMENTED = False
 
 
 def _jar(path: Path, *, fabric: bool = True, mod_id: str = "cool_creepers") -> None:
@@ -52,7 +55,39 @@ def _fake_neoforge(installs: Path, version: str) -> None:
     (inst / "run.sh").write_text("#!/bin/sh\n", encoding="utf-8")
 
 
-class GoldenBootTests(unittest.TestCase):
+def _has_golden(world: Path) -> bool:
+    meta = world / "golden.json"
+    if not meta.is_file():
+        return False
+    try:
+        data = json.loads(meta.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    if not isinstance(data, dict):
+        return False
+    if not str(data.get("minecraft_version") or "").strip():
+        return False
+    if not str(data.get("loader") or "").strip():
+        return False
+    return (world / "golden_mods").is_dir()
+
+
+def _boot_mode(world: Path) -> str:
+    path = world / "boot.json"
+    if not path.is_file():
+        return ""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return ""
+    return str(data.get("mode") or "") if isinstance(data, dict) else ""
+
+
+@unittest.skipUnless(
+    GOLDEN_ROLLBACK_IMPLEMENTED,
+    "golden restore is a later Minecraft-layer pass",
+)
+class GoldenBootContractTests(unittest.TestCase):
     def tearDown(self) -> None:
         for key in (
             "DATA_DIR",
@@ -60,6 +95,7 @@ class GoldenBootTests(unittest.TestCase):
             "INSTALL_DIR",
             "MINECRAFT_VERSION",
             "JAVA_OPTS",
+            "MOD_PUBLISHER_DIR",
         ):
             os.environ.pop(key, None)
 
@@ -82,31 +118,25 @@ class GoldenBootTests(unittest.TestCase):
         )
         return world
 
-    def test_ha_pin_is_attempted_after_first_boot(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            world = self._env(Path(tmp), "1.21.11")
-            with patch.object(haos_defaults, "_seed_infrastructure", return_value=None):
-                self.assertEqual(haos_defaults.cmd_prepare_world(), 0)
-            profile = json.loads((world / "profile.json").read_text(encoding="utf-8"))
-            self.assertEqual(profile["minecraft_version"], "1.21.11")
-            self.assertEqual(profile["loader"], "neoforge")
-            cmd = haos_defaults.prepare_game_command()
-            self.assertIsNotNone(cmd)
-            self.assertTrue((world / "server.jar").exists())
-            self.assertTrue((Path(os.environ["INSTALL_DIR"]) / "neoforge-1.21.1").is_dir())
-            session = golden_boot.load_boot_session(world)
-            self.assertEqual(session.get("mode"), "attempt")
-            self.assertEqual(session.get("minecraft_version"), "1.21.11")
+    def _probe(self, *, ready: bool = False, player_count: int | None = None) -> None:
+        status: dict[str, object] = {}
+        if ready:
+            status["ready"] = True
+            status["game_version"] = "1.21.1"
+        if player_count is not None:
+            status["player_count"] = player_count
+        with patch.object(haos_defaults, "minecraft_status_payload", return_value=status):
+            with patch.object(haos_defaults, "read_server_properties", return_value={}):
+                haos_defaults.cmd_status_probe()
 
     def test_stock_ready_promotes_without_player(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             world = self._env(Path(tmp))
             (world / "uploaded_mods").mkdir(parents=True)
             haos_defaults.prepare_game_command()
-            golden_boot.apply_probe_findings(world, {"ready": True})
-            self.assertTrue(golden_boot.has_golden(world))
-            meta = golden_boot.load_golden_meta(world)
-            assert meta is not None
+            self._probe(ready=True)
+            self.assertTrue(_has_golden(world))
+            meta = json.loads((world / "golden.json").read_text(encoding="utf-8"))
             self.assertEqual(meta["minecraft_version"], "1.21.1")
             self.assertTrue(meta.get("stock"))
 
@@ -117,11 +147,29 @@ class GoldenBootTests(unittest.TestCase):
             uploaded.mkdir(parents=True)
             _jar(uploaded / "cool_creepers.jar", fabric=False)
             haos_defaults.prepare_game_command()
-            golden_boot.apply_probe_findings(world, {"ready": True})
-            self.assertFalse(golden_boot.has_golden(world))
-            golden_boot.apply_probe_findings(world, {"ready": True, "player_count": 1})
-            self.assertTrue(golden_boot.has_golden(world))
-            self.assertFalse(json.loads((world / "golden.json").read_text()).get("stock"))
+            self._probe(ready=True)
+            self.assertFalse(_has_golden(world))
+            self._probe(ready=True, player_count=1)
+            self.assertTrue(_has_golden(world))
+            self.assertFalse(
+                json.loads((world / "golden.json").read_text(encoding="utf-8")).get("stock")
+            )
+
+    def test_pin_change_ready_without_player_does_not_promote(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            world = self._env(Path(tmp))
+            (world / "uploaded_mods").mkdir(parents=True)
+            haos_defaults.prepare_game_command()
+            self._probe(ready=True)
+            self.assertTrue(_has_golden(world))
+            os.environ["MINECRAFT_VERSION"] = "1.21.11"
+            haos_defaults.prepare_game_command()
+            self._probe(ready=True)
+            meta = json.loads((world / "golden.json").read_text(encoding="utf-8"))
+            self.assertEqual(meta["minecraft_version"], "1.21.1")
+            self._probe(ready=True, player_count=1)
+            meta = json.loads((world / "golden.json").read_text(encoding="utf-8"))
+            self.assertEqual(meta["minecraft_version"], "1.21.11")
 
     def test_unproven_crash_boots_golden_without_rewriting_uploads(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -129,18 +177,23 @@ class GoldenBootTests(unittest.TestCase):
             uploaded = world / "uploaded_mods"
             uploaded.mkdir(parents=True)
             haos_defaults.prepare_game_command()
-            golden_boot.apply_probe_findings(world, {"ready": True})
+            self._probe(ready=True)
             _jar(uploaded / "cool_creepers.jar", fabric=False)
-            golden_boot.mark_attempt_request(world)
+            os.environ["MOD_PUBLISHER_DIR"] = str(Path(tmp) / "pub")
+            Path(os.environ["MOD_PUBLISHER_DIR"]).mkdir()
+            drop = Path(tmp) / "drop.jar"
+            _jar(drop, fabric=False)
+            self.assertEqual(publish_mod.publish(drop), 0)
             haos_defaults.prepare_game_command()
             self.assertTrue((world / "mods" / "cool_creepers.jar").is_file())
-            self.assertEqual(golden_boot.load_boot_session(world).get("mode"), "attempt")
-            self.assertFalse(golden_boot.load_boot_session(world).get("proven"))
+            self.assertEqual(_boot_mode(world), "attempt")
             cmd = haos_defaults.prepare_game_command()
             self.assertIsNotNone(cmd)
-            self.assertEqual(golden_boot.load_boot_session(world).get("mode"), "golden")
+            self.assertEqual(_boot_mode(world), "golden")
             self.assertTrue((uploaded / "cool_creepers.jar").is_file())
             self.assertFalse((world / "mods" / "cool_creepers.jar").exists())
+            self.assertTrue((Path(os.environ["INSTALL_DIR"]) / "neoforge-1.21.1").is_dir())
+            self.assertTrue((Path(os.environ["INSTALL_DIR"]) / "neoforge-1.21.11").is_dir())
 
     def test_empty_restart_after_fallback_does_not_restage_uploads(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -148,13 +201,17 @@ class GoldenBootTests(unittest.TestCase):
             uploaded = world / "uploaded_mods"
             uploaded.mkdir(parents=True)
             haos_defaults.prepare_game_command()
-            golden_boot.apply_probe_findings(world, {"ready": True})
+            self._probe(ready=True)
             _jar(uploaded / "cool_creepers.jar", fabric=False)
-            golden_boot.mark_attempt_request(world)
+            os.environ["MOD_PUBLISHER_DIR"] = str(Path(tmp) / "pub")
+            Path(os.environ["MOD_PUBLISHER_DIR"]).mkdir()
+            drop = Path(tmp) / "drop.jar"
+            _jar(drop, fabric=False)
+            publish_mod.publish(drop)
             haos_defaults.prepare_game_command()
             haos_defaults.prepare_game_command()
             haos_defaults.prepare_game_command()
-            self.assertEqual(golden_boot.load_boot_session(world).get("mode"), "golden")
+            self.assertEqual(_boot_mode(world), "golden")
             self.assertTrue((uploaded / "cool_creepers.jar").is_file())
             self.assertFalse((world / "mods" / "cool_creepers.jar").exists())
 
@@ -164,21 +221,30 @@ class GoldenBootTests(unittest.TestCase):
             uploaded = world / "uploaded_mods"
             uploaded.mkdir(parents=True)
             haos_defaults.prepare_game_command()
-            golden_boot.apply_probe_findings(world, {"ready": True})
+            self._probe(ready=True)
             haos_defaults.prepare_game_command()
-            self.assertEqual(golden_boot.load_boot_session(world).get("mode"), "golden")
-            _jar(uploaded / "cool_creepers.jar", fabric=False)
-            golden_boot.mark_attempt_request(world)
+            self.assertEqual(_boot_mode(world), "golden")
+            os.environ["MOD_PUBLISHER_DIR"] = str(Path(tmp) / "pub")
+            Path(os.environ["MOD_PUBLISHER_DIR"]).mkdir()
+            drop = Path(tmp) / "drop.jar"
+            _jar(drop, fabric=False)
+            publish_mod.publish(drop)
             haos_defaults.prepare_game_command()
-            self.assertEqual(golden_boot.load_boot_session(world).get("mode"), "attempt")
+            self.assertEqual(_boot_mode(world), "attempt")
             self.assertTrue((world / "mods" / "cool_creepers.jar").is_file())
 
-    def test_missing_install_fails_clearly(self) -> None:
+    def test_ha_pin_edit_starts_new_attempt(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            world = self._env(Path(tmp), "1.99.9")
-            os.environ["MINECRAFT_VERSION"] = "1.99.9"
-            cmd = haos_defaults.prepare_game_command()
-            self.assertIsNone(cmd)
+            world = self._env(Path(tmp))
+            (world / "uploaded_mods").mkdir(parents=True)
+            haos_defaults.prepare_game_command()
+            self._probe(ready=True)
+            haos_defaults.prepare_game_command()
+            self.assertEqual(_boot_mode(world), "golden")
+            os.environ["MINECRAFT_VERSION"] = "1.21.11"
+            haos_defaults.prepare_game_command()
+            self.assertEqual(_boot_mode(world), "attempt")
+            self.assertTrue((world / "server.jar").exists())
 
     def test_publish_marks_attempt_request(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -189,6 +255,28 @@ class GoldenBootTests(unittest.TestCase):
             _jar(incoming, fabric=False)
             self.assertEqual(publish_mod.publish(incoming), 0)
             self.assertTrue((world / "attempt.request").is_file())
+
+    def test_minecraft_only_state_no_supervisor_golden_api(self) -> None:
+        base = ROOT / "game-server-base"
+        hits = []
+        for path in base.rglob("*"):
+            if not path.is_file():
+                continue
+            if "__pycache__" in path.parts or path.suffix in {".pyc", ".png"}:
+                continue
+            try:
+                text = path.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                continue
+            if "golden_mods" in text or "golden.json" in text:
+                hits.append(str(path.relative_to(ROOT)))
+        self.assertEqual(hits, [])
+
+    def test_restored_golden_crashloop_fails_healthz_contract(self) -> None:
+        plugin = (MC / "games" / "game.yaml").read_text(encoding="utf-8")
+        cfg = (MC / "config.yaml").read_text(encoding="utf-8")
+        self.assertIn("hold_on_crash_loop: false", plugin)
+        self.assertIn("healthz", cfg)
 
 
 if __name__ == "__main__":

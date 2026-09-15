@@ -33,7 +33,6 @@ services:
       STATUS_HTTP_PORT: "8099"
       HA_NOTIFICATIONS: "false"
       SERVER_PORT: "25565"
-      PUBLISHER_PORT: "8765"
       BACKUP_ENABLED: "true"
       BACKUP_RETENTION: standard
       MIN_FREE_DISK_MB: "2048"
