@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Start Copyparty (kid uploads) then the generic supervisor.
+# Supervisor owns Copyparty (kid uploads on the live mods folder).
 set -euo pipefail
 
 VERSION="${APP_VERSION:-}"
@@ -39,19 +39,7 @@ else
   echo "No options.json at ${OPTIONS_FILE}; using environment defaults"
 fi
 
-python3 /opt/haos_defaults.py write-copyparty-config
-
-# Independent of the game JVM: SIGHUP-proof babysitter so a crash/exec cannot
-# take down the upload page (kids delete the breaking jar from /mods/).
-mkdir -p /data/logs
-nohup bash -c '
-  while true; do
-    copyparty -c "$1" || true
-    echo "Copyparty exited; retry in 2s" >&2
-    sleep 2
-  done
-' _ "${MOD_PUBLISHER_DIR}/copyparty.conf" >>/data/logs/copyparty.log 2>&1 &
-disown $! || true
-echo "Copyparty publisher on TCP ${PUBLISHER_PORT}"
+python3 /opt/haos_defaults.py write-copyparty-banner
+echo "Copyparty file-drop on TCP ${PUBLISHER_PORT} (live mods folder, supervisor)"
 
 exec python3 -m game_server --plugin "${GAME_PLUGIN}"

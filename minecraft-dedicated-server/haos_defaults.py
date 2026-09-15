@@ -1,4 +1,4 @@
-"""Minecraft add-on helpers: loader install, world profiles, Copyparty config.
+"""Minecraft add-on helpers: loader install, world profiles, Copyparty banner.
 
 Kept out of game-server-base so Fabric/NeoForge names stay in this folder.
 """
@@ -69,27 +69,6 @@ def worlds_dir() -> Path:
 
 def publisher_root() -> Path:
     return Path(os.environ.get("MOD_PUBLISHER_DIR") or "/data/mod-publisher")
-
-
-def sync_active_mods_link() -> Path:
-    """Point Copyparty /mods at the live world's mods folder."""
-
-    target = profile_dir() / "mods"
-    target.mkdir(parents=True, exist_ok=True)
-    root = publisher_root()
-    root.mkdir(parents=True, exist_ok=True)
-    link = root / "installed"
-    if link.is_symlink():
-        try:
-            if link.resolve() == target.resolve():
-                return link
-        except OSError:
-            pass
-        link.unlink()
-    elif link.exists():
-        return link
-    link.symlink_to(target)
-    return link
 
 
 def state_dir() -> Path:
@@ -262,7 +241,7 @@ def cmd_prepare_world() -> int:
     _write_server_properties(directory)
     _link_install(directory, loader, version)
     _seed_infrastructure(directory, loader, version)
-    sync_active_mods_link()
+    cmd_write_copyparty_banner()
     return 0
 
 
@@ -389,7 +368,6 @@ def cmd_run() -> int:
     version = str(profile.get("minecraft_version") or minecraft_version())
     install = install_dir() / f"{loader}-{version}"
     _link_install(directory, loader, version)
-    sync_active_mods_link()
     java_opts = env_or_option("java_opts", "-Xms2G -Xmx4G")
     os.chdir(directory)
     cmd = ["java", *java_opts.split()]
@@ -412,6 +390,123 @@ def cmd_run() -> int:
     return 1
 
 
+def _pack_varint(value: int) -> bytes:
+    out = bytearray()
+    n = int(value)
+    while True:
+        byte = n & 0x7F
+        n >>= 7
+        if n:
+            out.append(byte | 0x80)
+        else:
+            out.append(byte)
+            break
+    return bytes(out)
+
+
+def _pack_mc_str(text: str) -> bytes:
+    raw = text.encode("utf-8")
+    return _pack_varint(len(raw)) + raw
+
+
+def _read_varint(sock) -> int:
+    shift = 0
+    result = 0
+    while True:
+        chunk = sock.recv(1)
+        if not chunk:
+            raise OSError("short varint")
+        byte = chunk[0]
+        result |= (byte & 0x7F) << shift
+        if not byte & 0x80:
+            return result
+        shift += 7
+        if shift > 35:
+            raise OSError("varint too long")
+
+
+def minecraft_status_online(host: str = "127.0.0.1", port: int = 25565) -> int | None:
+    """Java server-list ping (same JSON the client multiplayer list uses)."""
+
+    import socket
+    import struct
+
+    sock = socket.create_connection((host, port), timeout=2.0)
+    try:
+        host_bytes = _pack_mc_str(host)
+        handshake = (
+            b"\x00"
+            + _pack_varint(0)
+            + host_bytes
+            + struct.pack(">H", int(port))
+            + _pack_varint(1)
+        )
+        sock.sendall(_pack_varint(len(handshake)) + handshake)
+        sock.sendall(_pack_varint(1) + b"\x00")
+        length = _read_varint(sock)
+        payload = b""
+        while len(payload) < length:
+            chunk = sock.recv(length - len(payload))
+            if not chunk:
+                break
+            payload += chunk
+        if not payload or payload[0] != 0:
+            return None
+        rest = payload[1:]
+        n = 0
+        shift = 0
+        idx = 0
+        while idx < len(rest):
+            byte = rest[idx]
+            n |= (byte & 0x7F) << shift
+            idx += 1
+            if not byte & 0x80:
+                break
+            shift += 7
+        raw = rest[idx : idx + n]
+        data = json.loads(raw.decode("utf-8"))
+        players = data.get("players") if isinstance(data, dict) else None
+        if not isinstance(players, dict):
+            return None
+        return int(players.get("online") or 0)
+    finally:
+        sock.close()
+
+
+def cmd_player_count() -> int:
+    port_raw = os.environ.get("SERVER_PORT") or "25565"
+    try:
+        port = int(port_raw)
+    except ValueError:
+        port = 25565
+    try:
+        online = minecraft_status_online("127.0.0.1", port)
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError, ValueError):
+        return 1
+    if online is None:
+        return 1
+    print(online, flush=True)
+    return 0
+
+
+def _sweep_drop_junk(folder: Path) -> None:
+    if not folder.is_dir():
+        return
+    for path in folder.iterdir():
+        if not path.is_file():
+            continue
+        name = path.name
+        if name.endswith(".PARTIAL") or name.endswith(".partial"):
+            path.unlink(missing_ok=True)
+            continue
+        try:
+            empty_jar = path.suffix.lower() == ".jar" and path.stat().st_size == 0
+        except OSError:
+            continue
+        if empty_jar:
+            path.unlink(missing_ok=True)
+
+
 def fabric_launcher_jar(install: Path, directory: Path) -> Path | None:
     entry = helper_server_entry(install)
     if entry is None:
@@ -424,99 +519,28 @@ def fabric_launcher_jar(install: Path, directory: Path) -> Path | None:
     return None
 
 
-def cmd_write_copyparty_config() -> int:
-    password = env_or_option("publisher_password", "family")
-    port = env_or_option("publisher_port", os.environ.get("PUBLISHER_PORT") or "8765")
-    root = publisher_root()
-    incoming = root / "incoming"
-    incoming.mkdir(parents=True, exist_ok=True)
-    installed = sync_active_mods_link()
-    hook = root / "on-upload.sh"
-    hook.write_text(
-        "#!/bin/sh\n"
-        # xau (if used) passes the path as $1. xiu passes absolute paths on stdin
-        # after the up2k handshake so deleting the inbox file cannot retrigger
-        # the browser upload.
-        'if [ "$#" -ge 1 ]; then\n'
-        '  exec python3 /opt/publish_mod.py "$1"\n'
-        "fi\n"
-        "exec python3 /opt/publish_mod.py --stdin\n",
-        encoding="utf-8",
-    )
-    hook.chmod(0o755)
-    guard = root / "on-delete-guard.sh"
-    guard.write_text(
-        '#!/bin/sh\nexec python3 /opt/publish_mod.py --guard-delete "$1"\n',
-        encoding="utf-8",
-    )
-    guard.chmod(0o755)
-    after_del = root / "on-delete.sh"
-    after_del.write_text(
-        '#!/bin/sh\nexec python3 /opt/publish_mod.py --after-delete "$1"\n',
-        encoding="utf-8",
-    )
-    after_del.chmod(0o755)
-    # Dotfile: kids have no "dots" permission, so they cannot delete the banner.
-    (incoming / ".prologue.html").write_text(
+def cmd_write_copyparty_banner() -> int:
+    """Kid-facing HTML on the live mods folder (Copyparty has no dots perm)."""
+
+    mods = profile_dir() / "mods"
+    mods.mkdir(parents=True, exist_ok=True)
+    _sweep_drop_junk(mods)
+    (mods / ".prologue.html").write_text(
         """\
 <div style="max-width:42rem;margin:1rem 0 1.25rem;padding:1rem 1.15rem;\
 background:#241c12;color:#f2e6c9;border-left:4px solid #5aad32;\
 font-family:sans-serif;line-height:1.45">
   <strong>Family Minecraft mods</strong>
-  <p style="margin:0.6rem 0 0">You are in the right place. Drop a
-  <code>.jar</code> here to <em>add or replace</em> a mod. The same mod id
-  replaces the last build even if the filename is different. After it
-  installs, the file leaves this folder (it is an inbox, not the mod list).</p>
-  <p style="margin:0.6rem 0 0">To take a mod off the server, open
-  <a href="/mods/">Installed mods</a> and delete its jar (not AutoModpack).
-  The server restarts after a change. Then relaunch Minecraft if AutoModpack
-  asks.</p>
+  <p style="margin:0.6rem 0 0">This folder <em>is</em> the live mod list.
+  Drop a <code>.jar</code> here to add or replace a mod (same mod id
+  replaces the last build even if the filename is different). Delete a
+  jar to take it off (not AutoModpack). Use a build for this world&rsquo;s
+  Minecraft version and loader (1.21.1 NeoForge unless you created a
+  Fabric world).</p>
+  <p style="margin:0.6rem 0 0">If anyone is playing, the server waits
+  until the last player leaves, then restarts. Then relaunch Minecraft
+  if AutoModpack asks.</p>
 </div>
-""",
-        encoding="utf-8",
-    )
-    (root / "copyparty.conf").write_text(
-        f"""\
-[global]
-  p: {port}
-  e2dsa
-  no-crt
-  hist: {root / "cphist"}
-  name: Family Minecraft mods
-  doctitle: Family Minecraft mods
-  no-thumb
-  no-acode
-  no-zip
-  no-lifetime
-  unpost: 0
-  unp-who: 0
-  ui-nombar
-  ui-nosrvi
-  ui-notree
-  ui-nolbar
-  ui-noctxb
-  ui-norepl
-
-[accounts]
-  kids: {password}
-
-[/]
-  {incoming}
-  accs:
-    rw: kids
-  flags:
-    e2dsa
-    xiu: i2,{hook}
-
-[/mods]
-  {installed}
-  accs:
-    r: kids
-    d: kids
-  flags:
-    e2dsa
-    xbd: c,{guard}
-    xad: {after_del}
 """,
         encoding="utf-8",
     )
@@ -530,12 +554,14 @@ def main(argv: list[str]) -> int:
         "install": cmd_install,
         "prepare-world": cmd_prepare_world,
         "run": cmd_run,
-        "write-copyparty-config": cmd_write_copyparty_config,
+        "write-copyparty-banner": cmd_write_copyparty_banner,
+        "write-copyparty-config": cmd_write_copyparty_banner,
+        "player-count": cmd_player_count,
     }
     if cmd not in handlers:
         print(
             "Usage: haos_defaults.py print-version|install|prepare-world|run|"
-            "write-copyparty-config",
+            "write-copyparty-banner|player-count",
             file=sys.stderr,
         )
         return 2
