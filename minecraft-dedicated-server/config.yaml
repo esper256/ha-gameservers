@@ -1,6 +1,6 @@
 name: "Minecraft Dedicated Server"
 description: "Family Minecraft Java server with Fabric or NeoForge per world, kid JAR uploads, AutoModpack client sync, and world backups."
-version: "3.8.4"
+version: "3.9.0"
 slug: "minecraft_dedicated_server"
 url: "https://github.com/esper256/ha-gameservers/tree/main/minecraft-dedicated-server"
 arch:

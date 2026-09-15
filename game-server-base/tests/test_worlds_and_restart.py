@@ -278,6 +278,13 @@ class RestartSupervisorTests(unittest.TestCase):
             health = supervisor.health()
             self.assertEqual(health["lifecycle"], "restarting")
             self.assertTrue(health["ok"])
+            supervisor._activity = None
+            supervisor.process.start_count = 1
+            supervisor.process.intentional_stop = False
+            supervisor.config.restart_on_crash = False
+            health = supervisor.health()
+            self.assertEqual(health["lifecycle"], "failed")
+            self.assertTrue(health["ok"])
 
 
 if __name__ == "__main__":

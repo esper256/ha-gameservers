@@ -32,6 +32,7 @@ ENV_TOML_RE = re.compile(
     r'^\s*(?:side|displayTest)\s*=\s*"([^"]+)"',
     re.IGNORECASE | re.MULTILINE,
 )
+MC_TOKEN_RE = re.compile(r"1\.\d+(?:\.\d+)?")
 
 
 def publisher_root() -> Path:
@@ -67,6 +68,41 @@ def _read_text_from_zip(zf: zipfile.ZipFile, name: str) -> str | None:
         return None
 
 
+def _toml_dep_ranges(toml: str) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for chunk in re.split(r"\[\[dependencies", toml, flags=re.IGNORECASE):
+        mod = re.search(r'modId\s*=\s*"([^"]+)"', chunk, re.IGNORECASE)
+        rng = re.search(r'versionRange\s*=\s*"([^"]+)"', chunk, re.IGNORECASE)
+        if mod and rng:
+            out[mod.group(1).strip().lower()] = rng.group(1).strip()
+    return out
+
+
+def _fabric_minecraft_spec(fabric: dict[str, Any]) -> str:
+    depends = fabric.get("depends")
+    if not isinstance(depends, dict):
+        return ""
+    raw = depends.get("minecraft")
+    if isinstance(raw, list):
+        return ",".join(str(item) for item in raw)
+    return str(raw or "").strip()
+
+
+def minecraft_spec_covers(spec: str, world_version: str) -> bool:
+    """True if the jar does not name a different Minecraft than this world."""
+
+    spec = (spec or "").strip()
+    world = (world_version or "").strip()
+    if not spec or spec in {"*", ""} or not world:
+        return True
+    tokens = MC_TOKEN_RE.findall(spec)
+    if not tokens:
+        return True
+    if world in tokens:
+        return True
+    return False
+
+
 def inspect_jar(path: Path) -> dict[str, Any]:
     with zipfile.ZipFile(path) as zf:
         names = set(zf.namelist())
@@ -89,18 +125,21 @@ def inspect_jar(path: Path) -> dict[str, Any]:
             "environment": environment,
             "version": str(fabric.get("version") or ""),
             "name": str(fabric.get("name") or mod_id),
+            "minecraft_spec": _fabric_minecraft_spec(fabric),
         }
     if toml:
         match = MODID_TOML_RE.search(toml)
         mod_id = match.group(1).strip() if match else ""
         side_match = ENV_TOML_RE.search(toml)
         environment = side_match.group(1).strip() if side_match else "*"
+        deps = _toml_dep_ranges(toml)
         return {
             "loader": "neoforge",
             "mod_id": mod_id,
             "environment": environment,
             "version": "",
             "name": mod_id,
+            "minecraft_spec": deps.get("minecraft") or "",
         }
     raise ValueError("JAR is not a Fabric or NeoForge mod (missing metadata)")
 
@@ -174,6 +213,14 @@ def _publish_locked(incoming: Path) -> int:
     if jar_loader and jar_loader != loader:
         return _fail(
             f"This world uses {loader}; the JAR is {jar_loader}",
+            incoming,
+            quarantine,
+        )
+    world_mc = str(profile.get("minecraft_version") or "").strip()
+    spec = str(info.get("minecraft_spec") or "")
+    if world_mc and not minecraft_spec_covers(spec, world_mc):
+        return _fail(
+            f"This world is Minecraft {world_mc}; the JAR asks for {spec}",
             incoming,
             quarantine,
         )

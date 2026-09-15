@@ -1623,7 +1623,9 @@ class GameServerSupervisor:
                     "Restart limit reached; supervisor is leaving the server stopped.",
                     force=True,
                 )
-                break
+                # Stay in the main loop so Ingress and other processes keep
+                # running. An operator restart (or restart.request) can start
+                # the game again after they fix the crash.
 
         self.monitor.stop()
         self.backups.stop()
