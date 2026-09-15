@@ -542,71 +542,24 @@ def install_tree_ready(loader: str, version: str) -> bool:
 
 
 def prepare_game_command() -> list[str] | None:
-    """Link the chosen install, stage mods, return JVM argv (no exec)."""
-
-    from golden_boot import (
-        choose_boot_mode,
-        is_stock_uploads,
-        load_golden_meta,
-        record_attempt_state,
-        stage_golden_snapshot,
-        write_boot_session,
-    )
+    """Link the HA pin install, stage uploads into mods/, return JVM argv."""
 
     directory = profile_dir()
     profile = read_profile(directory)
     loader = str(profile.get("loader") or "neoforge").lower()
     if loader not in {"neoforge", "fabric"}:
         loader = "neoforge"
-    ha_version = minecraft_version()
-    mode = choose_boot_mode(directory, ha_version=ha_version, loader=loader)
-    stock = is_stock_uploads(directory)
-    if mode == "golden":
-        meta = load_golden_meta(directory)
-        if meta is None:
-            mode = "attempt"
-    if mode == "golden":
-        assert meta is not None
-        loader = str(meta.get("loader") or loader)
-        version = str(meta.get("minecraft_version") or ha_version)
-        if not install_tree_ready(loader, version):
-            print(
-                f"Golden install missing: {install_tree(loader, version)}",
-                file=sys.stderr,
-            )
-            return None
-        _link_install(directory, loader, version)
-        _ensure_rcon_properties(directory)
-        stage_golden_snapshot(directory)
-        write_boot_session(
-            directory,
-            mode="golden",
-            loader=loader,
-            minecraft_version=version,
-            stock=bool(meta.get("stock")),
-            proven=True,
+    version = minecraft_version()
+    if not install_tree_ready(loader, version):
+        print(
+            f"Install tree missing for Minecraft {version} ({loader}): "
+            f"{install_tree(loader, version)}",
+            file=sys.stderr,
         )
-    else:
-        version = ha_version
-        if not install_tree_ready(loader, version):
-            print(
-                f"Install tree missing for Minecraft {version} ({loader}): "
-                f"{install_tree(loader, version)}",
-                file=sys.stderr,
-            )
-            return None
-        record_attempt_state(directory, ha_version=ha_version, loader=loader)
-        _link_install(directory, loader, version)
-        _ensure_rcon_properties(directory)
-        stage_mod_snapshot(directory)
-        write_boot_session(
-            directory,
-            mode="attempt",
-            loader=loader,
-            minecraft_version=version,
-            stock=stock,
-            proven=False,
-        )
+        return None
+    _link_install(directory, loader, version)
+    _ensure_rcon_properties(directory)
+    stage_mod_snapshot(directory)
     install = install_tree(loader, version)
     java_opts = env_or_option("java_opts", "-Xms2G -Xmx4G")
     cmd = ["java", *java_opts.split()]
@@ -911,9 +864,6 @@ def cmd_status_probe() -> int:
         if "player_count" not in findings and "player_count" in status:
             findings["player_count"] = status["player_count"]
     print(json.dumps(findings, separators=(",", ":")), flush=True)
-    from golden_boot import apply_probe_findings
-
-    apply_probe_findings(directory, findings)
     return 0
 
 

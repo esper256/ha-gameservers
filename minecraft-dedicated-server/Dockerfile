@@ -64,7 +64,6 @@ RUN useradd -m -u 1000 -s /bin/bash gameserver \
 COPY game_server /opt/game_server
 COPY games/game.yaml /opt/games/game.yaml
 COPY haos_defaults.py /opt/haos_defaults.py
-COPY golden_boot.py /opt/golden_boot.py
 COPY publish_mod.py /opt/publish_mod.py
 COPY launch_wrapper.sh /opt/launch_wrapper.sh
 COPY config.yaml /etc/hassio_app_config.yaml

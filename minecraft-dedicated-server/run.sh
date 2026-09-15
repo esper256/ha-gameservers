@@ -24,7 +24,6 @@ export DATA_DIR="${DATA_DIR:-/data/worlds}"
 export STATE_DIR="${STATE_DIR:-/data/supervisor}"
 export STATUS_HTTP_PORT="${STATUS_HTTP_PORT:-8099}"
 export SERVER_PORT=25565
-export PUBLISHER_PORT="${PUBLISHER_PORT:-8765}"
 export PATH="/opt/java/bin:/opt/mc-image-helper/bin:${PATH}"
 
 export MOD_PUBLISHER_DIR="${MOD_PUBLISHER_DIR:-/data/mod-publisher}"
@@ -39,6 +38,6 @@ else
 fi
 
 python3 /opt/haos_defaults.py write-copyparty-banner
-echo "Copyparty file-drop on TCP ${PUBLISHER_PORT} (upload folder, supervisor)"
+echo "Copyparty file-drop on TCP 8765 (upload folder, supervisor)"
 
 exec python3 -m game_server --plugin "${GAME_PLUGIN}"

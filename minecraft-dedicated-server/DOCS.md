@@ -6,8 +6,8 @@ Accept the Minecraft EULA (the **EULA** option, default on). Mojang requires thi
 
 ## Configure and start
 
-1. On **Configuration**, set **World name**, **Minecraft version** (pin, e.g. `1.21.1`), and **Upload page password**.
-2. Leave **Update interval** at **0** so Minecraft itself stays pinned. Changing the version option later is an intentional upgrade.
+1. On **Configuration**, set **World name**, **Minecraft version** (pin, e.g. `1.21.1` or `1.21.11`), and **Upload page password**.
+2. Leave **Update interval** at **0** so Minecraft itself stays pinned. Changing the version option later is an intentional upgrade (a new loader tree is installed beside the previous pin).
 3. **Start**. First boot downloads Fabric and NeoForge for that pin (needs outbound HTTPS).
 4. **Open Web UI** → **Worlds** → create extra worlds and pick the loader there (NeoForge default).
 5. On **Network**, map the Minecraft Java port to whatever host port you want (default 25565). Map the upload port the same way (container 8765 → whatever host port you set; keep it on the LAN only, not the public internet).
@@ -23,7 +23,7 @@ Open `http://<home-assistant-host>:<upload-host-port>/` (the host port on **Netw
 
 This site is the **upload** folder (`uploaded_mods/`), not the running server’s `mods/` snapshot. Drop a JAR to add or replace a mod (same mod id replaces the last build even if the filename is different). The jar must match this world’s **Minecraft version** (the Configuration pin) and **loader**. Do not upload NeoForge/Fabric installer jars; those are the world type, not a mod.
 
-Minecraft keeps the last **proven** snapshot (stock ready, or extra mods after someone joins) until a new attempt works. Delete a jar on the same page to take it off the next *attempt* (not AutoModpack / Fabric API). If nobody is connected, the game restarts after a short pause so several jars can land together. If anyone is playing, it waits until the last player leaves, then restarts. Relaunch Minecraft if AutoModpack asks. If a new pin or upload crashes before it is proven, the last proven snapshot starts again; the upload folder is left as your next experiment. Home Assistant restarts the add-on if even that snapshot will not start.
+Minecraft stages a snapshot of the upload folder into `mods/` when the JVM starts. Delete a jar on the same page to take it off the next restart (not AutoModpack / Fabric API). If nobody is connected, the game restarts after a short pause so several jars can land together. If anyone is playing, it waits until the last player leaves, then restarts. Relaunch Minecraft if AutoModpack asks. If Minecraft crash-loops, the add-on and upload page stay up.
 
 Do not upload AutoModpack or Fabric API — those are protected.
 

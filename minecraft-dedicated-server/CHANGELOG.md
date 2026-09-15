@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.12.1
+
+- Minecraft version on Configuration applies after the first start. Older loader installs stay on disk.
+- If Minecraft crash-loops, the add-on and upload page stay up.
+
 ## 3.12.0
 
 - Minecraft version on Configuration applies after the first start. Older loader installs stay on disk.
