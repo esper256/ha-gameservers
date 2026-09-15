@@ -39,7 +39,7 @@ Each world is a profile (save + mods + Fabric or NeoForge). Kids publish JARs on
 
 ## Publishing a mod
 
-Build a normal Fabric or NeoForge JAR (must match the world). Open the upload page, sign in, drop the JAR onto the live mods folder. Same mod id replaces the last build. If the server is empty it restarts soon after; if anyone is playing it waits until they leave. Relaunch Minecraft if AutoModpack asks.
+Build a normal Fabric or NeoForge JAR (must match the world). Open the upload page, sign in, drop the JAR onto the upload folder. Same mod id replaces the last build. The running server keeps a launch snapshot of `mods/` until it restarts (empty-server restart applies the new set). If the server is empty it restarts soon after; if anyone is playing it waits until they leave. Relaunch Minecraft if AutoModpack asks.
 
 To remove a mod, delete the jar on that same page (leave AutoModpack).
 

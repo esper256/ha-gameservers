@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import fcntl
 import json
 import os
 import re
@@ -16,9 +15,12 @@ from typing import Any
 from haos_defaults import (  # noqa: E402
     PROTECTED_MOD_IDS,
     active_world_name,
+    install_atomic,
     profile_dir,
+    publish_lock,
     read_profile,
     state_dir,
+    uploaded_mods_dir,
 )
 
 HISTORY_KEEP = 10
@@ -176,20 +178,9 @@ def _request_restart() -> None:
     )
 
 
-def _lock_file():
-    path = publisher_root() / "publish.lock"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    handle = path.open("a+")
-    fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
-    return handle
-
-
 def publish(incoming: Path) -> int:
-    lock = _lock_file()
-    try:
+    with publish_lock():
         return _publish_locked(incoming)
-    finally:
-        lock.close()
 
 
 def _publish_locked(incoming: Path) -> int:
@@ -224,7 +215,7 @@ def _publish_locked(incoming: Path) -> int:
             incoming,
             quarantine,
         )
-    dest_dir = world / "mods"
+    dest_dir = uploaded_mods_dir(world)
     if _client_only(str(info.get("environment") or "*")):
         dest_dir = world / "automodpack" / "host-modpack" / "main" / "mods"
     dest_dir.mkdir(parents=True, exist_ok=True)
@@ -237,10 +228,8 @@ def _publish_locked(incoming: Path) -> int:
         slot.mkdir(parents=True, exist_ok=True)
         shutil.copy2(canonical, slot / "artifact.jar")
         _prune_history(hist)
+    install_atomic(incoming, canonical)
     if not same:
-        tmp = dest_dir / f"{mod_id}.jar.partial"
-        shutil.copy2(incoming, tmp)
-        tmp.replace(canonical)
         try:
             incoming.unlink()
         except OSError:
@@ -300,11 +289,8 @@ def publish_from_stdin() -> int:
 
 
 def rollback(mod_id: str) -> int:
-    lock = _lock_file()
-    try:
+    with publish_lock():
         return _rollback_locked(mod_id)
-    finally:
-        lock.close()
 
 
 def _rollback_locked(mod_id: str) -> int:
@@ -327,9 +313,9 @@ def _rollback_locked(mod_id: str) -> int:
     if not latest.is_file():
         print("History artifact missing", file=sys.stderr)
         return 1
-    dest = world / "mods" / f"{mod_id}.jar"
+    dest = uploaded_mods_dir(world) / f"{mod_id}.jar"
     dest.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(latest, dest)
+    install_atomic(latest, dest)
     _request_restart()
     print(f"Rolled back {mod_id} from {latest}")
     return 0
@@ -345,15 +331,19 @@ def after_delete(path: Path) -> int:
     return 0
 
 
+def _upload_root() -> Path:
+    return uploaded_mods_dir(profile_dir()).resolve()
+
+
 def guard_delete(path: Path) -> int:
     """Block deletes of protected mods; Copyparty xbd ``c`` treats nonzero as deny."""
 
-    mods = (profile_dir() / "mods").resolve()
+    uploaded = _upload_root()
     try:
         resolved = path.resolve()
-        resolved.relative_to(mods)
+        resolved.relative_to(uploaded)
     except (OSError, ValueError):
-        print("Refusing delete outside the active mods folder", file=sys.stderr)
+        print("Refusing delete outside the upload folder", file=sys.stderr)
         return 2
     if resolved.suffix.lower() != ".jar":
         print("Only JAR deletes are allowed here", file=sys.stderr)
@@ -372,20 +362,23 @@ def guard_delete(path: Path) -> int:
 
 
 def guard_upload(path: Path) -> int:
-    """Block uploads that would replace a protected jar (Copyparty xbu ``c``)."""
+    """Block in-place writes onto sealed jars (Copyparty xbu ``c``)."""
 
-    mods = (profile_dir() / "mods").resolve()
-    candidate = path if path.is_absolute() else mods / path.name
+    uploaded = _upload_root()
+    candidate = path if path.is_absolute() else uploaded / path.name
     try:
         resolved = candidate.resolve()
-        resolved.relative_to(mods)
+        resolved.relative_to(uploaded)
     except (OSError, ValueError):
-        print("Refusing upload outside the active mods folder", file=sys.stderr)
+        print("Refusing upload outside the upload folder", file=sys.stderr)
         return 2
     stem = resolved.stem.lower()
     if stem.startswith("automodpack") or stem in PROTECTED_MOD_IDS:
         print(f"Refusing to replace protected mod {stem}", file=sys.stderr)
         return 2
+    name = resolved.name
+    if name.startswith(".") or name.lower().endswith(".partial"):
+        return 0
     if resolved.is_file() and resolved.suffix.lower() == ".jar":
         try:
             info = inspect_jar(resolved)
@@ -394,6 +387,11 @@ def guard_upload(path: Path) -> int:
                 return 2
         except (ValueError, zipfile.BadZipFile, OSError):
             pass
+        print(
+            "Refusing in-place overwrite of a sealed jar; upload as a new filename",
+            file=sys.stderr,
+        )
+        return 2
     return 0
 
 
