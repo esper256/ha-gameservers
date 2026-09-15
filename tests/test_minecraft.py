@@ -174,6 +174,36 @@ class PublishModTests(unittest.TestCase):
             self.assertEqual(publish_mod.publish(jar), 1)
             self.assertTrue((publisher / "quarantine" / "nope.jar").is_file())
 
+    def test_rejects_wrong_minecraft_version(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            worlds = root / "worlds" / "FamilyWorld"
+            worlds.mkdir(parents=True)
+            (worlds / "profile.json").write_text(
+                json.dumps({"loader": "neoforge", "minecraft_version": "1.21.1"}),
+                encoding="utf-8",
+            )
+            publisher = root / "publisher"
+            incoming = publisher / "incoming"
+            incoming.mkdir(parents=True)
+            os.environ["DATA_DIR"] = str(root / "worlds")
+            os.environ["STATE_DIR"] = str(root / "state")
+            os.environ["MOD_PUBLISHER_DIR"] = str(publisher)
+            Path(os.environ["STATE_DIR"]).mkdir(exist_ok=True)
+            jar = incoming / "Jade-1.21.11-NeoForge-21.1.7.jar"
+            with zipfile.ZipFile(jar, "w") as zf:
+                zf.writestr(
+                    "META-INF/neoforge.mods.toml",
+                    'modId="jade"\nside="BOTH"\n'
+                    '[[dependencies.jade]]\nmodId="minecraft"\n'
+                    'versionRange="[1.21.11]"\n',
+                )
+            self.assertEqual(publish_mod.publish(jar), 1)
+            self.assertTrue(
+                (publisher / "quarantine" / "Jade-1.21.11-NeoForge-21.1.7.jar").is_file()
+            )
+            self.assertFalse((worlds / "mods" / "jade.jar").exists())
+
     def test_copyparty_config_uses_upload_hook(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

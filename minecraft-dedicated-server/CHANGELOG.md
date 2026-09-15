@@ -1,5 +1,9 @@
 # Changelog
 
+## 3.8.5
+
+- Quarantine JARs whose Minecraft version range does not include the world’s pin (the 1.21.11 Jade crash). Loader installer trees stay off Copyparty.
+
 ## 3.8.4
 
 - Copyparty publishes on idle `xiu` (not `xau`) so deleting the inbox JAR cannot desync up2k and make the browser re-upload in a loop.
