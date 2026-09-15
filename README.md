@@ -43,7 +43,7 @@ Each Home Assistant app gives you automatic updates, world backups, Home Assista
 
 `game-server-base` is not an installable app. It is the reusable engine every game folder vendors. The base supervisor handles SteamCMD, HTTP archive, or command-based package install and auto-update, process supervision, crash restarts, scheduled world save backups, and a log-pattern scraping toolkit to enable the supervisor to have some vision into the game server state.
 
-Each game add-on is a thin layer on top (Steam/package identity, ports, world paths, log patterns, theme). Packaging another dedicated server is mostly: copy a game folder, fill in `games/game.yaml`, keep game identity out of the base package, sync, bump `{supervisor}.{minor}.{game patch}` (supervisor **3.9** → apps **3.9.0**).
+Each game add-on is a thin layer on top (Steam/package identity, ports, world paths, log patterns, theme). Packaging another dedicated server is mostly: copy a game folder, fill in `games/game.yaml`, keep game identity out of the base package, sync, bump `{supervisor}.{minor}.{game patch}` (supervisor **3.10** → apps **3.10.0**).
 
 → [How to package a game](game-server-base/README.md)
 

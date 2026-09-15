@@ -227,6 +227,18 @@ HTML_PAGE = """<!DOCTYPE html>
     .stat .value {{ font-size: 1.35rem; font-weight: 600; }}
     .stat .hint {{ color: var(--muted); font-size: 0.78rem; margin-top: 0.35rem; }}
     .stat .hint:empty {{ display: none; margin: 0; }}
+    a.stat-link {{
+      color: inherit;
+      text-decoration: none;
+      cursor: pointer;
+    }}
+    a.stat-link:hover {{
+      border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+    }}
+    a.stat-link:focus-visible {{
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }}
     .operator-action {{
       background: color-mix(in srgb, var(--accent) 14%, var(--panel));
       border: 1px solid color-mix(in srgb, var(--accent) 55%, transparent);
@@ -595,6 +607,11 @@ HTML_PAGE = """<!DOCTYPE html>
           Update now
         </button>
       </div>
+      <a class="stat stat-link {copyparty_card_class}" id="card-copyparty" href="{copyparty_href}" data-port="{copyparty_port}" target="_blank" rel="noopener noreferrer">
+        <div class="label">Uploads</div>
+        <div class="value" id="v-copyparty">{copyparty_files}</div>
+        <div class="hint" id="h-copyparty">{copyparty_hint}</div>
+      </a>
     </div>
 
     <div class="grid grid-secondary" id="status-grid-secondary">
@@ -1112,6 +1129,16 @@ HTML_PAGE = """<!DOCTYPE html>
         if (unusedBox) {{
           unusedBox.classList.toggle('hidden', !!u.unused_patterns_hidden);
         }}
+        const copypartyCard = document.getElementById('card-copyparty');
+        if (copypartyCard) {{
+          copypartyCard.classList.toggle('hidden', !!u.copyparty_card_hidden);
+          if (u.copyparty_port) {{
+            copypartyCard.setAttribute('data-port', String(u.copyparty_port));
+          }}
+        }}
+        setText('v-copyparty', u.copyparty_files);
+        setText('h-copyparty', u.copyparty_hint);
+        bindCopypartyLink(u.copyparty_port);
         const prompt = document.getElementById('promote-prompt');
         if (prompt) prompt.value = u.promote_prompt || '';
         const sel = document.getElementById('capture-select');
@@ -1143,6 +1170,15 @@ HTML_PAGE = """<!DOCTYPE html>
       }}
     }}
     setInterval(softRefresh, 5000);
+    bindCopypartyLink();
+    function bindCopypartyLink(port) {{
+      const card = document.getElementById('card-copyparty');
+      if (!card) return;
+      const raw = port != null && port !== '' ? port : card.getAttribute('data-port');
+      const p = Number(raw || 0);
+      if (!p) return;
+      card.setAttribute('href', 'http://' + location.hostname + ':' + p + '/');
+    }}
   </script>
 </body>
 </html>
@@ -1526,6 +1562,11 @@ class StatusServer:
                     return
 
                 status = provider()
+                request_host = (
+                    self.headers.get("X-Forwarded-Host")
+                    or self.headers.get("Host")
+                    or ""
+                )
 
                 if path in ("/api/status", "/status.json"):
                     self._json(200, status)
@@ -1539,6 +1580,7 @@ class StatusServer:
                             game_name,
                             ui_theme=ui_theme,
                             toolbox=toolbox,
+                            request_host=request_host,
                         ),
                     )
                     return
@@ -1618,6 +1660,7 @@ class StatusServer:
                         game_name,
                         ui_theme=ui_theme,
                         toolbox=toolbox,
+                        request_host=request_host,
                     )
                     html = render_status_html(
                         view, base_href=self._ingress_base()
@@ -2058,6 +2101,60 @@ def _format_operator_action(
     return title, detail, url, code, "".join(steps_html_parts), False
 
 
+def hostname_from_host_header(host: str) -> str:
+    """Hostname (or IPv6 in brackets) from a Host / X-Forwarded-Host value."""
+
+    text = (host or "").split(",")[0].strip()
+    if not text:
+        return ""
+    if text.startswith("["):
+        end = text.find("]")
+        if end != -1:
+            return text[: end + 1]
+        return text
+    if text.count(":") == 1:
+        return text.rsplit(":", 1)[0]
+    return text
+
+
+def copyparty_lan_href(port: int, host_header: str = "") -> str:
+    """http://<lan-host>:<copyparty-port>/ — Copyparty is not on Ingress."""
+
+    if port < 1 or port > 65535:
+        return "#"
+    host = hostname_from_host_header(host_header)
+    if not host:
+        return f"http://127.0.0.1:{port}/"
+    return f"http://{host}:{port}/"
+
+
+def _format_copyparty(
+    status: dict[str, Any],
+    *,
+    request_host: str = "",
+) -> tuple[str, str, str, str, bool, int]:
+    """Return card class, file label, hint, href, hidden, port."""
+
+    data = status.get("copyparty")
+    if not isinstance(data, dict) or not data:
+        return "hidden", "—", "", "#", True, 0
+    try:
+        port = int(data.get("port") or 0)
+    except (TypeError, ValueError):
+        port = 0
+    if port < 1 or port > 65535:
+        return "hidden", "—", "", "#", True, 0
+    try:
+        count = int(data.get("file_count") or 0)
+    except (TypeError, ValueError):
+        count = 0
+    if count < 0:
+        count = 0
+    files = "1 file" if count == 1 else f"{count} files"
+    hint = f"Open drop page · port {port}"
+    return "", files, hint, copyparty_lan_href(port, request_host), False, port
+
+
 def _format_running(status: dict[str, Any]) -> tuple[str, str]:
     """Hero server label from lifecycle (falls back to running bool)."""
 
@@ -2098,6 +2195,7 @@ def _ui_view(
     toolbox: Any = None,
     extra_examples: dict[str, list[str]] | None = None,
     alternate_examples: dict[str, list[str]] | None = None,
+    request_host: str = "",
 ) -> dict[str, Any]:
     """Formatted strings for the status page and soft-refresh JSON."""
 
@@ -2185,6 +2283,14 @@ def _ui_view(
     op_title, op_detail, op_url, op_code, op_steps, op_hidden = _format_operator_action(
         status
     )
+    (
+        copyparty_card_class,
+        copyparty_files,
+        copyparty_hint,
+        copyparty_href,
+        copyparty_hidden,
+        copyparty_port,
+    ) = _format_copyparty(status, request_host=request_host)
     update_pending = bool(status.get("update_pending"))
     update_check_hint = _format_update_check_hint(status)
     theme = resolve_ui_theme(ui_theme)
@@ -2247,6 +2353,12 @@ def _ui_view(
         "operator_action_url_class": "hidden" if not op_url else "",
         "operator_action_code_class": "hidden" if not op_code else "",
         "operator_action_code_hidden": not op_code,
+        "copyparty_card_class": copyparty_card_class,
+        "copyparty_card_hidden": copyparty_hidden,
+        "copyparty_files": copyparty_files,
+        "copyparty_hint": copyparty_hint,
+        "copyparty_href": copyparty_href,
+        "copyparty_port": str(copyparty_port) if copyparty_port else "",
     }
     for key in UI_THEME_KEYS:
         view[f"theme_{key}"] = theme[key]
@@ -2303,6 +2415,11 @@ _STATUS_HTML_KEYS = (
     "operator_action_code",
     "operator_action_code_class",
     "operator_action_steps",
+    "copyparty_card_class",
+    "copyparty_files",
+    "copyparty_hint",
+    "copyparty_href",
+    "copyparty_port",
 ) + tuple(f"theme_{key}" for key in UI_THEME_KEYS)
 
 
@@ -2372,6 +2489,11 @@ def render_status_html(view: dict[str, Any], *, base_href: str = "/") -> str:
             view.get("operator_action_code_class") or ""
         ),
         operator_action_steps=view.get("operator_action_steps") or "",
+        copyparty_card_class=_html_escape(view.get("copyparty_card_class") or ""),
+        copyparty_files=_html_escape(view.get("copyparty_files") or "—"),
+        copyparty_hint=_html_escape(view.get("copyparty_hint") or ""),
+        copyparty_href=_html_escape(view.get("copyparty_href") or "#"),
+        copyparty_port=_html_escape(str(view.get("copyparty_port") or "")),
         theme_bg=_html_escape(theme["bg"]),
         theme_panel=_html_escape(theme["panel"]),
         theme_ink=_html_escape(theme["ink"]),

@@ -1,6 +1,6 @@
 name: "Core Keeper Dedicated Server"
 description: "Core Keeper dedicated multiplayer server with SteamCMD auto-updates, player-aware restarts, generational world backups, and an Ingress status/log toolkit."
-version: "3.9.0"
+version: "3.10.0"
 slug: "core_keeper_dedicated_server"
 url: "https://github.com/esper256/ha-gameservers/tree/main/core-keeper-dedicated-server"
 # SteamCMD / Core Keeper dedicated server binaries are x86_64. HAOS on aarch64 will not offer this app.

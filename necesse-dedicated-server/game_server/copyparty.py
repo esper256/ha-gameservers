@@ -130,8 +130,9 @@ class CopypartyPublisher:
         path.mkdir(parents=True, exist_ok=True)
         return path
 
-    def _root_path(self) -> Path:
-        assert self._spec is not None
+    def expanded_root(self) -> Path | None:
+        if self._spec is None:
+            return None
         expanded = expand_world_path_template(
             self._spec.root,
             data_dir=self._data_dir,
@@ -139,8 +140,24 @@ class CopypartyPublisher:
             options=self._options,
         )
         if not expanded:
+            return None
+        return Path(expanded)
+
+    def ui_status(self) -> dict[str, Any] | None:
+        """Ingress card payload, or None when this game did not opt into Copyparty."""
+
+        if self._spec is None:
+            return None
+        root = self.expanded_root()
+        return {
+            "port": int(self._spec.port),
+            "file_count": count_visible_files(root) if root is not None else 0,
+        }
+
+    def _root_path(self) -> Path:
+        path = self.expanded_root()
+        if path is None:
             raise RuntimeError("copyparty.root did not expand (empty option?)")
-        path = Path(expanded)
         path.mkdir(parents=True, exist_ok=True)
         _sweep_partials(path)
         return path
@@ -271,6 +288,32 @@ def _shell_quote(part: str) -> str:
     if part.replace("_", "").replace("-", "").replace("/", "").replace(".", "").isalnum():
         return part
     return "'" + part.replace("'", "'\\''") + "'"
+
+
+def count_visible_files(folder: Path | None) -> int:
+    """Regular files in the drop root, skipping dots and Copyparty PARTIAL names."""
+
+    if folder is None or not folder.is_dir():
+        return 0
+    total = 0
+    try:
+        children = list(folder.iterdir())
+    except OSError:
+        return 0
+    for path in children:
+        try:
+            if not path.is_file():
+                continue
+        except OSError:
+            continue
+        name = path.name
+        if name.startswith("."):
+            continue
+        lower = name.lower()
+        if lower.endswith(".partial"):
+            continue
+        total += 1
+    return total
 
 
 def _sweep_partials(folder: Path) -> None:
