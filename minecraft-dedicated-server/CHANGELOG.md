@@ -1,5 +1,9 @@
 # Changelog
 
+## 3.14.5
+
+- A finished Copyparty upload now reaches publish (and the empty-server restart). The idle hook used to drop the file path Copyparty writes on stdin.
+
 ## 3.14.4
 
 - The version on Configuration is only `/data/options.json`. Startup downloads that install if it is missing. Copyparty uploads that already match the current `mods/` hardlink snapshot launch as-is; a mismatch or a different install link makes a new untested snapshot. A crash restores the last proven snapshot (hardlinks + install link). That proven snapshot is the only extra mutable copy.

@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -115,6 +116,47 @@ class CopypartyPublisherTests(unittest.TestCase):
             )
             self.assertIn("python3", upload)
             self.assertIn("/opt/publish_mod.py", upload)
+            self.assertIn("exec ", upload)
+            self.assertNotIn("while IFS=", upload)
+
+    def test_idle_hook_forwards_xiu_stdin_without_trailing_newline(self) -> None:
+        """Copyparty xiu: no argv, b'\\n'.join(paths) on stdin (no final newline)."""
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            data = root / "worlds"
+            (data / "FamilyWorld" / "mods").mkdir(parents=True)
+            seen = root / "seen.txt"
+            spec = CopypartySpec.from_dict(
+                {
+                    "port": 8765,
+                    "root": "{data_dir}/{world_name}/mods",
+                    "after_idle_upload": [
+                        sys.executable,
+                        "-c",
+                        "import sys; open(sys.argv[1], 'w').write(sys.stdin.read())",
+                        str(seen),
+                    ],
+                }
+            )
+            publisher = CopypartyPublisher(
+                spec,
+                state_dir=str(root / "state"),
+                data_dir=str(data),
+                options={"world_name": "FamilyWorld"},
+                world_name="FamilyWorld",
+            )
+            publisher._write_config()
+            hook = root / "state" / "copyparty" / "on-upload.sh"
+            path = "/data/worlds/World/uploaded_mods/xaero.jar"
+            result = subprocess.run(
+                [str(hook)],
+                input=path.encode("utf-8"),
+                check=False,
+                capture_output=True,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr.decode())
+            self.assertEqual(seen.read_text(encoding="utf-8"), path)
 
     def test_ui_status_counts_visible_files(self) -> None:
         from game_server.copyparty import count_visible_files

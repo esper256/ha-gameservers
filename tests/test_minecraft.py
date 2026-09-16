@@ -341,6 +341,8 @@ class PublishModTests(unittest.TestCase):
                 encoding="utf-8"
             )
             self.assertIn("publish_mod.py", hook)
+            self.assertIn("exec ", hook)
+            self.assertNotIn("while IFS=", hook)
 
     def test_copyparty_banner_on_upload_folder(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -650,6 +652,92 @@ class PublishModTests(unittest.TestCase):
             )
             self.assertEqual(gone.returncode, 0)
             self.assertTrue(restart_request_path(root / "state").is_file())
+
+    def test_xiu_stdin_without_argv_publishes_and_requests_restart(self) -> None:
+        """Copyparty xiu invokes the idle hook with paths on stdin, not argv."""
+
+        from game_server.active_world import restart_request_path
+        from game_server.copyparty import CopypartyPublisher, CopypartySpec
+
+        pub = str(MC / "publish_mod.py")
+        py = sys.executable
+        spec = CopypartySpec.from_dict(
+            {
+                "port": 8765,
+                "root": "{data_dir}/{world_name}/uploaded_mods",
+                "after_idle_upload": [py, pub],
+            }
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            data = root / "worlds"
+            uploaded = data / "World" / "uploaded_mods"
+            uploaded.mkdir(parents=True)
+            os.environ["DATA_DIR"] = str(data)
+            os.environ["STATE_DIR"] = str(root / "state")
+            os.environ["MOD_PUBLISHER_DIR"] = str(root / "publisher")
+            Path(os.environ["STATE_DIR"]).mkdir(parents=True, exist_ok=True)
+            Path(os.environ["MOD_PUBLISHER_DIR"]).mkdir(parents=True, exist_ok=True)
+            (data / "World" / "profile.json").write_text(
+                json.dumps({"loader": "neoforge"}),
+                encoding="utf-8",
+            )
+            _write_ha_pin(root)
+            publisher = CopypartyPublisher(
+                spec,
+                state_dir=str(root / "state"),
+                data_dir=str(data),
+                options={"publisher_password": "secret", "world_name": "World"},
+                world_name="World",
+            )
+            publisher._write_config()
+            hook = root / "state" / "copyparty" / "on-upload.sh"
+            drop = uploaded / "xaerominimap-neoforge-1.21.11-26.5.0.jar"
+            _jar(drop, fabric=False, mod_id="xaerominimap")
+            hook_env = {
+                **os.environ,
+                "PYTHONPATH": os.pathsep.join(
+                    [str(MC), str(BASE), os.environ.get("PYTHONPATH", "")]
+                ),
+            }
+            published = subprocess.run(
+                [str(hook)],
+                input=str(drop).encode("utf-8"),
+                check=False,
+                env=hook_env,
+                capture_output=True,
+            )
+            self.assertEqual(
+                published.returncode,
+                0,
+                published.stderr.decode() + published.stdout.decode(),
+            )
+            self.assertTrue((uploaded / "xaerominimap.jar").is_file())
+            self.assertFalse(drop.exists())
+            self.assertTrue(restart_request_path(root / "state").is_file())
+            self.assertIn(b"Published xaerominimap", published.stdout)
+
+    def test_xiu_json_stdin_publishes(self) -> None:
+        drop = Path("/tmp/does-not-matter")
+        payload = json.dumps(
+            [
+                {
+                    "ap": "/data/worlds/World/uploaded_mods/xaero.jar",
+                    "sz": 12,
+                    "wark": "abc",
+                }
+            ]
+        )
+        paths = publish_mod.paths_from_xiu_payload(payload)
+        self.assertEqual(
+            [p.as_posix() for p in paths],
+            ["/data/worlds/World/uploaded_mods/xaero.jar"],
+        )
+        self.assertEqual(
+            [p.as_posix() for p in publish_mod.paths_from_xiu_payload(str(drop))],
+            [str(drop)],
+        )
+        self.assertEqual(publish_mod.paths_from_xiu_payload(""), [])
 
 
 class HaVersionPinTests(unittest.TestCase):
