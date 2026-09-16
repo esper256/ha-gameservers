@@ -14,8 +14,10 @@ from typing import Any
 
 from haos_defaults import (  # noqa: E402
     PROTECTED_MOD_IDS,
+    MinecraftPinError,
     active_world_name,
     install_atomic,
+    minecraft_version,
     profile_dir,
     read_profile,
     state_dir,
@@ -203,7 +205,10 @@ def publish(incoming: Path) -> int:
             incoming,
             quarantine,
         )
-    world_mc = str(profile.get("minecraft_version") or "").strip()
+    try:
+        world_mc = minecraft_version()
+    except MinecraftPinError as exc:
+        return _fail(str(exc), incoming, quarantine)
     spec = str(info.get("minecraft_spec") or "")
     if world_mc and not minecraft_spec_covers(spec, world_mc):
         return _fail(
