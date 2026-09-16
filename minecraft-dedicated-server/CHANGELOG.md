@@ -4,6 +4,7 @@
 
 - The version on Configuration is only `/data/options.json`. Startup downloads that install if it is missing. Copyparty uploads that already match the current `mods/` hardlink snapshot launch as-is; a mismatch or a different install link makes a new untested snapshot. A crash restores the last proven snapshot (hardlinks + install link). That proven snapshot is the only extra mutable copy.
 - Linux no longer prints the 1.21.11 kqueue / DebugFile stack (Netty probing macOS-only I/O). The server already fell through to epoll.
+- A finished Copyparty upload now reaches publish (and the empty-server restart). The idle hook used to drop the file path Copyparty writes on stdin.
 
 ## 3.14.3
 

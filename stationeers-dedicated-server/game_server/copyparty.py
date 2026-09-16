@@ -225,14 +225,11 @@ class CopypartyPublisher:
         quoted = " ".join(_shell_quote(part) for part in argv)
         path = self._conf_dir() / name
         if idle:
-            body = (
-                "#!/bin/sh\n"
-                f'if [ "$#" -ge 1 ]; then exec {quoted} "$1"; fi\n'
-                'while IFS= read -r p; do\n'
-                '  [ -n "$p" ] || continue\n'
-                f"  {quoted} \"$p\" || true\n"
-                "done\n"
-            )
+            # Copyparty xiu never passes argv. It writes joined absolute paths
+            # on stdin via b"\n".join(paths) — no trailing newline — so a
+            # `while read` loop drops the only (or last) file and publish never
+            # runs. Forward stdin to the program; tests may still pass a path.
+            body = f"#!/bin/sh\nexec {quoted} \"$@\"\n"
         else:
             body = f"#!/bin/sh\nexec {quoted} \"$1\"\n"
         path.write_text(body, encoding="utf-8")
