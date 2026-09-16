@@ -11,7 +11,7 @@ Accept the Minecraft EULA (the **EULA** option, default on). Mojang requires thi
 3. **Start**. First boot downloads Fabric and NeoForge for that pin (needs outbound HTTPS).
 4. **Open Web UI** → **Worlds** → create extra worlds and pick the loader there (NeoForge default).
 5. On **Network**, map the Minecraft Java port to whatever host port you want (default 25565). Map the upload port the same way (container 8765 → whatever host port you set; keep it on the LAN only, not the public internet).
-6. On each player PC: Prism instance with the same Minecraft version, matching loader, and AutoModpack. Join once, trust the server fingerprint, let mods sync, relaunch.
+6. On each player PC: Prism instance with the same Minecraft version, matching loader, and AutoModpack. Open the mod-upload page and copy `AUTOMODPACK-FINGERPRINT.txt` (it appears after the first successful start). Join once, paste that fingerprint when the client warns about mods, let mods sync, relaunch. Same value for every player.
 
 ## OPEN WEB UI
 

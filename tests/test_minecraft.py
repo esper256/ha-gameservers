@@ -360,9 +360,10 @@ class PublishModTests(unittest.TestCase):
             Path(os.environ["STATE_DIR"]).mkdir(exist_ok=True)
             try:
                 self.assertEqual(haos_defaults.cmd_write_copyparty_banner(), 0)
-                self.assertTrue(
-                    (worlds / "uploaded_mods" / ".prologue.html").is_file()
+                banner = (worlds / "uploaded_mods" / ".prologue.html").read_text(
+                    encoding="utf-8"
                 )
+                self.assertIn("AUTOMODPACK-FINGERPRINT.txt", banner)
             finally:
                 os.environ.pop("DATA_DIR", None)
                 os.environ.pop("STATE_DIR", None)
@@ -384,6 +385,10 @@ class PublishModTests(unittest.TestCase):
             self.assertEqual(publish_mod.guard_upload(jar), 2)
             fresh = uploaded / "cool-creepers-2.jar"
             self.assertEqual(publish_mod.guard_upload(fresh), 0)
+            fingerprint = uploaded / "AUTOMODPACK-FINGERPRINT.txt"
+            fingerprint.write_text("fingerprint\n", encoding="utf-8")
+            self.assertEqual(publish_mod.guard_delete(fingerprint), 2)
+            self.assertEqual(publish_mod.guard_upload(fingerprint), 2)
 
     def test_atomic_replace_uses_new_inode(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1281,6 +1286,177 @@ class StatusProbeTests(unittest.TestCase):
             payload = json.loads(buf.getvalue())
             self.assertEqual(payload.get("player_count"), 2)
             self.assertTrue(payload.get("ready"))
+            self.assertNotIn("automodpack_fingerprint", payload)
+
+
+_TEST_AUTOMODPACK_CERT = """\
+-----BEGIN CERTIFICATE-----
+MIIDFzCCAf+gAwIBAgIUD8APV0kbxy9RkDm9s4Vy0tyjne4wDQYJKoZIhvcNAQEL
+BQAwGzEZMBcGA1UEAwwQYXV0b21vZHBhY2stdGVzdDAeFw0yNjA5MTYxNDQzNDZa
+Fw0zNjA5MTMxNDQzNDZaMBsxGTAXBgNVBAMMEGF1dG9tb2RwYWNrLXRlc3QwggEi
+MA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQDS8N31L5jFvjX6HOE24hxK02Rs
+J2gV25On9wM3sRiGjycHORfetzFCT4JDDJW8H99cvqTZAP+2S82o65UupnBysntI
+5BZg8sTdOpYHtxZik7B9q+n+PqYdEyUeTRmpAHoSebJ+xn3dl9zQ4B1/XbQ2l+Us
+enpoIf30NQnYQNEQzPaMA/37pw+Utjsnqa/qD61kNRmnR5grl6Ewg2eun6LVIvcB
+2R0jRt9URNS4DAysaXC29NhG9gnLTY/ErlC4j1hxRWGQex1uDDYU7+vLy+GxrpPc
+wXr7/7joPUm9pPCeZvVkyiwWAidbkrMHPYz01fQcdRy6bxhqtGCfEY9NhNdVAgMB
+AAGjUzBRMB0GA1UdDgQWBBS4V0nIK7ejHV454e6Wf6ZqW05OtzAfBgNVHSMEGDAW
+gBS4V0nIK7ejHV454e6Wf6ZqW05OtzAPBgNVHRMBAf8EBTADAQH/MA0GCSqGSIb3
+DQEBCwUAA4IBAQB+qb2kiAQcHSlLdjEDySEYb7LJnEss3LNm6NyoWs5hB4ZkWx1T
+PMRMZkZtEdd0v6K2TbrmwbhCoSLZwKT+KxxNwXKPSyzkqHf1/k53HHGEcGzC6WrD
+vyF31/1DXGEdfd+RkqPMXxTYsaB2b6IzJRRhj4wlbQLF+MnU4s4V2o/6/LGEWXK5
+P/A47b8RvJQ77DebfuiB5yvZqvv1R8DCY8cH+1RLQkPGoz6ntcN8B4wufEfQDSAA
+v7PjkSG53pvhJugQ4O+GFwUPrFz39Vdxr4za+qox4dMejHaHJS3V+BRLT4Iox8Gy
+tVOL/twF9BTNS1II6Zfn+OlfSdENNZoYSF/W
+-----END CERTIFICATE-----
+"""
+
+_TEST_AUTOMODPACK_FINGERPRINT = (
+    "17:E0:5C:B7:95:78:39:2C:AA:79:A3:F0:2E:5E:40:2F:"
+    "C0:F5:2E:80:7E:C8:70:43:E4:AD:31:3D:8A:02:C0:D9"
+)
+
+
+def _write_automodpack_cert(world: Path) -> Path:
+    cert = world / "automodpack" / ".private" / "cert.crt"
+    cert.parent.mkdir(parents=True, exist_ok=True)
+    cert.write_text(_TEST_AUTOMODPACK_CERT, encoding="utf-8")
+    return cert
+
+
+class AutoModpackFingerprintTests(unittest.TestCase):
+    def test_fingerprint_matches_openssl_style_sha256(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            world = Path(tmp) / "World"
+            _write_automodpack_cert(world)
+            self.assertEqual(
+                haos_defaults.automodpack_tls_fingerprint(world),
+                _TEST_AUTOMODPACK_FINGERPRINT,
+            )
+
+    def test_missing_cert_is_quiet(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            world = Path(tmp) / "World"
+            world.mkdir()
+            self.assertIsNone(haos_defaults.automodpack_tls_fingerprint(world))
+            self.assertIsNone(haos_defaults.write_automodpack_fingerprint_file(world))
+            uploaded = world / "uploaded_mods"
+            self.assertFalse(
+                (uploaded / haos_defaults.AUTOMODPACK_FINGERPRINT_NAME).exists()
+            )
+
+    def test_writes_sealed_copyparty_text_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            world = Path(tmp) / "World"
+            _write_automodpack_cert(world)
+            dest = haos_defaults.write_automodpack_fingerprint_file(world)
+            assert dest is not None
+            self.assertEqual(dest.name, "AUTOMODPACK-FINGERPRINT.txt")
+            text = dest.read_text(encoding="utf-8")
+            self.assertIn(_TEST_AUTOMODPACK_FINGERPRINT, text)
+            self.assertIn("Paste this when the Minecraft client warns", text)
+            self.assertEqual(dest.stat().st_mode & 0o777, 0o444)
+            inode = dest.stat().st_ino
+            again = haos_defaults.write_automodpack_fingerprint_file(world)
+            self.assertEqual(again, dest)
+            self.assertEqual(dest.stat().st_ino, inode)
+
+    def test_sealed_jars_ignore_fingerprint_txt(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            uploaded = Path(tmp)
+            (uploaded / "cool_creepers.jar").write_bytes(b"mod")
+            (uploaded / "AUTOMODPACK-FINGERPRINT.txt").write_text(
+                "fp\n", encoding="utf-8"
+            )
+            jars = haos_defaults.sealed_jars(uploaded)
+            self.assertEqual([path.name for path in jars], ["cool_creepers.jar"])
+
+    def test_prepare_game_command_writes_fingerprint_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            world = self._env(Path(tmp), "1.21.1")
+            _write_automodpack_cert(world)
+            cmd = haos_defaults.prepare_game_command()
+            self.assertIsNotNone(cmd)
+            dest = world / "uploaded_mods" / "AUTOMODPACK-FINGERPRINT.txt"
+            self.assertTrue(dest.is_file())
+            self.assertIn(_TEST_AUTOMODPACK_FINGERPRINT, dest.read_text(encoding="utf-8"))
+
+    def test_status_probe_writes_file_after_ready(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            world = self._env(Path(tmp), "1.21.1")
+            _write_automodpack_cert(world)
+            buf = io.StringIO()
+            with patch.object(
+                haos_defaults,
+                "minecraft_status_payload",
+                return_value={"ready": True, "player_count": 0, "game_version": "1.21.1"},
+            ):
+                with patch("sys.stdout", buf):
+                    self.assertEqual(haos_defaults.cmd_status_probe(), 0)
+            payload = json.loads(buf.getvalue())
+            self.assertTrue(payload.get("ready"))
+            self.assertNotIn("automodpack_fingerprint", payload)
+            dest = world / "uploaded_mods" / "AUTOMODPACK-FINGERPRINT.txt"
+            self.assertTrue(dest.is_file())
+            self.assertIn(_TEST_AUTOMODPACK_FINGERPRINT, dest.read_text(encoding="utf-8"))
+
+    def test_status_probe_skips_write_until_ready(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            world = self._env(Path(tmp), "1.21.1")
+            _write_automodpack_cert(world)
+            buf = io.StringIO()
+            with patch.object(haos_defaults, "minecraft_status_payload", return_value={}):
+                with patch("sys.stdout", buf):
+                    self.assertEqual(haos_defaults.cmd_status_probe(), 0)
+            dest = world / "uploaded_mods" / "AUTOMODPACK-FINGERPRINT.txt"
+            self.assertFalse(dest.exists())
+
+    def test_minecraft_copyparty_skips_fingerprint_in_file_count(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp)
+            (folder / "cool_creepers.jar").write_bytes(b"mod")
+            (folder / "AUTOMODPACK-FINGERPRINT.txt").write_text("fp\n", encoding="utf-8")
+            (folder / ".prologue.html").write_text("banner\n", encoding="utf-8")
+            env = {**os.environ, "PYTHONPATH": str(MC)}
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    "-c",
+                    "from pathlib import Path; "
+                    "from game_server.copyparty import count_visible_files; "
+                    f"print(count_visible_files(Path({str(folder)!r})))",
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+                env=env,
+            )
+            self.assertEqual(completed.stdout.strip(), "1")
+
+    def _env(self, tmp: Path, version: str = "1.21.1") -> Path:
+        worlds = tmp / "worlds"
+        world = worlds / "World"
+        world.mkdir(parents=True)
+        installs = tmp / "installs"
+        os.environ["DATA_DIR"] = str(worlds)
+        os.environ["STATE_DIR"] = str(tmp / "state")
+        os.environ["INSTALL_DIR"] = str(installs)
+        os.environ["JAVA_OPTS"] = "-Xms32M"
+        _write_ha_pin(tmp, version)
+        Path(os.environ["STATE_DIR"]).mkdir(parents=True, exist_ok=True)
+        inst = installs / f"neoforge-{version}"
+        inst.mkdir(parents=True)
+        (inst / "server.jar").write_bytes(b"starter")
+        (inst / "run.sh").write_text("#!/bin/sh\n", encoding="utf-8")
+        (world / "profile.json").write_text(
+            json.dumps({"loader": "neoforge"}),
+            encoding="utf-8",
+        )
+        uploaded = world / "uploaded_mods"
+        uploaded.mkdir(parents=True)
+        (uploaded / "cool_creepers.jar").write_bytes(b"mod")
+        os.chmod(uploaded / "cool_creepers.jar", 0o444)
+        return world
 
 
 if __name__ == "__main__":

@@ -7,10 +7,12 @@ from __future__ import annotations
 
 import errno
 import fcntl
+import hashlib
 import json
 import os
 import re
 import shutil
+import ssl
 import subprocess
 import sys
 from pathlib import Path
@@ -33,6 +35,8 @@ PROTECTED_MOD_IDS = frozenset(
 SEALED_MODE = 0o444
 UPLOADED_MODS = "uploaded_mods"
 MODS_SNAPSHOT = "mods"
+AUTOMODPACK_CERT_REL = Path("automodpack") / ".private" / "cert.crt"
+AUTOMODPACK_FINGERPRINT_NAME = "AUTOMODPACK-FINGERPRINT.txt"
 
 
 class MinecraftPinError(RuntimeError):
@@ -262,6 +266,78 @@ def uploaded_mods_dir(directory: Path | None = None) -> Path:
 
 def mods_snapshot_dir(directory: Path | None = None) -> Path:
     return (directory or profile_dir()) / MODS_SNAPSHOT
+
+
+def is_automodpack_fingerprint_name(name: str) -> bool:
+    return name.strip().lower() == AUTOMODPACK_FINGERPRINT_NAME.lower()
+
+
+def automodpack_cert_path(directory: Path | None = None) -> Path:
+    return (directory or profile_dir()) / AUTOMODPACK_CERT_REL
+
+
+def automodpack_tls_fingerprint(directory: Path | None = None) -> str | None:
+    """SHA-256 of the AutoModpack host cert, openssl -fingerprint style."""
+
+    path = automodpack_cert_path(directory)
+    if not path.is_file():
+        return None
+    try:
+        pem = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+    try:
+        der = ssl.PEM_cert_to_DER_cert(pem)
+    except ValueError:
+        return None
+    digest = hashlib.sha256(der).hexdigest().upper()
+    return ":".join(digest[i : i + 2] for i in range(0, len(digest), 2))
+
+
+def automodpack_fingerprint_text(fingerprint: str) -> str:
+    return (
+        "AutoModpack fingerprint\n"
+        "\n"
+        "Paste this when the Minecraft client warns about connecting "
+        "to a server with mods:\n"
+        "\n"
+        f"{fingerprint}\n"
+        "\n"
+        "This is public (the hash of the server cert). Same value for "
+        "every player. It is not a password.\n"
+    )
+
+
+def write_automodpack_fingerprint_file(
+    directory: Path | None = None,
+) -> Path | None:
+    """Copy the public fingerprint into the Copyparty drop folder when the cert exists."""
+
+    directory = directory or profile_dir()
+    fingerprint = automodpack_tls_fingerprint(directory)
+    if not fingerprint:
+        return None
+    uploaded = uploaded_mods_dir(directory)
+    uploaded.mkdir(parents=True, exist_ok=True)
+    dest = uploaded / AUTOMODPACK_FINGERPRINT_NAME
+    body = automodpack_fingerprint_text(fingerprint)
+    try:
+        if dest.is_file() and dest.read_text(encoding="utf-8") == body:
+            return dest
+    except OSError:
+        pass
+    tmp = dest.with_name(dest.name + ".tmp")
+    try:
+        tmp.write_text(body, encoding="utf-8")
+        os.replace(tmp, dest)
+        os.chmod(dest, SEALED_MODE)
+    except OSError:
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
+        return None
+    return dest
 
 
 def _is_partial_name(name: str) -> bool:
@@ -938,6 +1014,7 @@ def prepare_game_command() -> list[str] | None:
             print("Missing NeoForge server.jar", file=sys.stderr)
             return None
         cmd += ["-jar", str(starter), "nogui"]
+    write_automodpack_fingerprint_file(directory)
     return cmd
 
 
@@ -1211,6 +1288,7 @@ def cmd_status_probe() -> int:
         status = {}
     if "ready" in status:
         findings["ready"] = True
+        write_automodpack_fingerprint_file(directory)
     if "game_version" in status:
         findings["game_version"] = status["game_version"]
     if "player_count" in status:
@@ -1274,6 +1352,9 @@ font-family:sans-serif;line-height:1.45">
   until a new pin or upload is ready to try. If anyone is playing, it
   waits until the last player leaves, then restarts. Then relaunch
   Minecraft if AutoModpack asks.</p>
+  <p style="margin:0.6rem 0 0">After the server has started once, copy
+  <code>AUTOMODPACK-FINGERPRINT.txt</code> (read-only) and paste it when
+  the Minecraft client warns about mods.</p>
 </div>
 """,
         encoding="utf-8",

@@ -17,6 +17,7 @@ from haos_defaults import (  # noqa: E402
     MinecraftPinError,
     active_world_name,
     install_atomic,
+    is_automodpack_fingerprint_name,
     minecraft_version,
     profile_dir,
     read_profile,
@@ -356,6 +357,9 @@ def guard_delete(path: Path) -> int:
     except (OSError, ValueError):
         print("Refusing delete outside the upload folder", file=sys.stderr)
         return 2
+    if is_automodpack_fingerprint_name(resolved.name):
+        print("Refusing to delete the AutoModpack fingerprint file", file=sys.stderr)
+        return 2
     if resolved.suffix.lower() != ".jar":
         print("Only JAR deletes are allowed here", file=sys.stderr)
         return 2
@@ -383,11 +387,14 @@ def guard_upload(path: Path) -> int:
     except (OSError, ValueError):
         print("Refusing upload outside the upload folder", file=sys.stderr)
         return 2
+    name = resolved.name
+    if is_automodpack_fingerprint_name(name):
+        print("Refusing to replace the AutoModpack fingerprint file", file=sys.stderr)
+        return 2
     stem = resolved.stem.lower()
     if stem.startswith("automodpack") or stem in PROTECTED_MOD_IDS:
         print(f"Refusing to replace protected mod {stem}", file=sys.stderr)
         return 2
-    name = resolved.name
     if name.startswith(".") or name.lower().endswith(".partial"):
         return 0
     if resolved.is_file() and resolved.suffix.lower() == ".jar":
