@@ -120,6 +120,7 @@ class GoldenBootContractTests(unittest.TestCase):
             "SERVER_PORT",
             "OPTIONS_FILE",
             "SUPERVISOR_TOKEN",
+            "GAME_START_REASON",
         ):
             os.environ.pop(key, None)
 
@@ -209,6 +210,7 @@ class GoldenBootContractTests(unittest.TestCase):
             haos_defaults.prepare_game_command()
             self.assertTrue((world / "mods" / "cool_creepers.jar").is_file())
             self.assertEqual(_boot_mode(world), "attempt")
+            os.environ["GAME_START_REASON"] = "crash"
             cmd = haos_defaults.prepare_game_command()
             self.assertIsNotNone(cmd)
             self.assertEqual(_boot_mode(world), "golden")
@@ -217,7 +219,7 @@ class GoldenBootContractTests(unittest.TestCase):
             self.assertTrue((Path(os.environ["INSTALL_DIR"]) / "neoforge-1.21.1").is_dir())
             self.assertTrue((Path(os.environ["INSTALL_DIR"]) / "neoforge-1.21.11").is_dir())
 
-    def test_empty_restart_after_fallback_does_not_restage_uploads(self) -> None:
+    def test_user_start_after_crash_fallback_retries_uploads(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             world = self._env(Path(tmp))
             uploaded = world / "uploaded_mods"
@@ -231,11 +233,15 @@ class GoldenBootContractTests(unittest.TestCase):
             _jar(drop, fabric=False)
             publish_mod.publish(drop)
             haos_defaults.prepare_game_command()
-            haos_defaults.prepare_game_command()
+            os.environ["GAME_START_REASON"] = "crash"
             haos_defaults.prepare_game_command()
             self.assertEqual(_boot_mode(world), "golden")
             self.assertTrue((uploaded / "cool_creepers.jar").is_file())
             self.assertFalse((world / "mods" / "cool_creepers.jar").exists())
+            os.environ["GAME_START_REASON"] = "boot"
+            haos_defaults.prepare_game_command()
+            self.assertEqual(_boot_mode(world), "attempt")
+            self.assertTrue((world / "mods" / "cool_creepers.jar").is_file())
 
     def test_copyparty_change_starts_new_attempt(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -324,8 +330,10 @@ class GoldenBootContractTests(unittest.TestCase):
             _write_ha_pin(Path(tmp), "1.21.11")
             haos_defaults.prepare_game_command()
             self.assertEqual(_boot_mode(world), "attempt")
+            os.environ["GAME_START_REASON"] = "crash"
             haos_defaults.prepare_game_command()
             self.assertEqual(_boot_mode(world), "golden")
+            os.environ["GAME_START_REASON"] = "boot"
             haos_defaults.prepare_game_command()
             self.assertEqual(_boot_mode(world), "attempt")
             session = json.loads((world / "boot.json").read_text(encoding="utf-8"))
@@ -434,6 +442,13 @@ class GoldenBootContractTests(unittest.TestCase):
                 minecraft_version="1.21.11",
                 stock=True,
             )
+            self.assertEqual(
+                golden_boot.choose_boot_mode(
+                    world, ha_version="1.21.11", loader="neoforge"
+                ),
+                "attempt",
+            )
+            os.environ["GAME_START_REASON"] = "crash"
             self.assertEqual(
                 golden_boot.choose_boot_mode(
                     world, ha_version="1.21.11", loader="neoforge"

@@ -8,6 +8,7 @@ last proven copy of that snapshot. Minecraft-layer only.
 from __future__ import annotations
 
 import json
+import os
 import shutil
 from pathlib import Path
 from typing import Any, Literal
@@ -178,23 +179,30 @@ def should_restage(directory: Path, *, loader: str, version: str) -> bool:
         return True
     if uploads_match_snapshot(directory):
         return False
-    session = load_boot_session(directory)
-    if str(session.get("mode") or "") == "golden" and has_golden(directory):
-        return False
     return True
+
+
+def game_start_reason() -> str:
+    """Supervisor launch reason (``boot``, ``crash``, ``restart:…``). Default boot."""
+
+    return str(os.environ.get("GAME_START_REASON") or "boot").strip().lower()
 
 
 def choose_boot_mode(
     directory: Path, *, ha_version: str = "", loader: str = ""
 ) -> BootMode:
-    """golden = last proven snapshot after an untested crash; else try the live snapshot."""
+    """golden only when the supervisor is restarting after a crash."""
 
     session = load_boot_session(directory)
     unproven_attempt = (
         str(session.get("mode") or "") == "attempt"
         and not bool(session.get("proven"))
     )
-    if unproven_attempt and has_golden(directory):
+    if (
+        game_start_reason() == "crash"
+        and unproven_attempt
+        and has_golden(directory)
+    ):
         return "golden"
     return "attempt"
 

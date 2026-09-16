@@ -1,5 +1,9 @@
 # Changelog
 
+## 3.14.7
+
+- A user start or Configuration restart always tries the requested Minecraft version, loader pin, and uploaded mods. The last proven snapshot is used only when the supervisor restarts the game after a crash.
+
 ## 3.14.6
 
 - Configuration can pin NeoForge (`latest`, `beta`, or an exact id such as `21.11.10-beta`) and the Fabric loader (`latest` or an exact id). Each pin keeps its own install tree so the last proven snapshot is not overwritten.

@@ -151,6 +151,7 @@ class ProcessManager:
             cmd = self.build_command()
             env = os.environ.copy()
             env.update(self.plugin.env)
+            env["GAME_START_REASON"] = reason
             if self.start_count > 0:
                 self.restart_count += 1
             self.start_count += 1
