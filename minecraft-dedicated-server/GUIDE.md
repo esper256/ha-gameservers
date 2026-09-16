@@ -33,7 +33,7 @@ Each world is a profile (save + mods + Fabric or NeoForge). Publish JARs on a LA
 3. Open **Documentation**. Accept EULA, set the upload page password, **Start**.
 4. Forward the Minecraft Java port you mapped in the add-on Network settings. Keep the upload port on the LAN.
 5. Create worlds in **Open Web UI**. Default loader is NeoForge.
-6. Prism: one instance per loader. First join trusts AutoModpack, then relaunch.
+6. Prism: one instance per loader. Copy `AUTOMODPACK-FINGERPRINT.txt` from the mod-upload page (after the first start) and paste it when the client warns about mods, then relaunch.
 
 ---
 

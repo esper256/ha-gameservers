@@ -20,6 +20,12 @@ from typing import Any, Mapping
 from .active_world import fetch_addon_network
 from .world_save import expand_world_path_template
 
+try:
+    from haos_defaults import is_automodpack_fingerprint_name
+except ImportError:  # other games using this supervisor copy
+    def is_automodpack_fingerprint_name(name: str) -> bool:
+        return False
+
 LOG = logging.getLogger("game_server.copyparty")
 
 
@@ -335,7 +341,7 @@ def _shell_quote(part: str) -> str:
 
 
 def count_visible_files(folder: Path | None) -> int:
-    """Regular files in the drop root, skipping dots and Copyparty PARTIAL names."""
+    """Regular files in the drop root, skipping dots, PARTIAL names, and the fingerprint txt."""
 
     if folder is None or not folder.is_dir():
         return 0
@@ -355,6 +361,8 @@ def count_visible_files(folder: Path | None) -> int:
             continue
         lower = name.lower()
         if lower.endswith(".partial"):
+            continue
+        if is_automodpack_fingerprint_name(name):
             continue
         total += 1
     return total

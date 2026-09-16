@@ -1,5 +1,9 @@
 # Changelog
 
+## 3.14.9
+
+- After the server has started once, the mod-upload page has a read-only `AUTOMODPACK-FINGERPRINT.txt`. Paste that value when the Minecraft client warns about mods. It is the public hash of the AutoModpack cert, not a password.
+
 ## 3.14.8
 
 - The whitelist toggle is gone. There was no way to add players, and turning it off did not work (JSON `false` was ignored). The server now writes `white-list=false`. Online mode is the access check.
