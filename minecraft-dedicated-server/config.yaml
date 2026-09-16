@@ -1,6 +1,6 @@
 name: "Minecraft Dedicated Server"
 description: "Minecraft Java dedicated server with Fabric or NeoForge per world, a LAN mod-upload page, AutoModpack client sync, and world backups."
-version: "3.14.5"
+version: "3.14.6"
 slug: "minecraft_dedicated_server"
 url: "https://github.com/esper256/ha-gameservers/tree/main/minecraft-dedicated-server"
 arch:
@@ -26,6 +26,8 @@ ports_description:
 options:
   world_name: "World"
   minecraft_version: "1.21.1"
+  neoforge_version: "latest"
+  fabric_loader_version: "latest"
   server_motd: "A Minecraft Server"
   server_slots: 8
   online_mode: true
@@ -49,6 +51,8 @@ options:
 schema:
   world_name: str
   minecraft_version: str
+  neoforge_version: str
+  fabric_loader_version: str
   server_motd: str
   server_slots: int(1,100)
   online_mode: bool
