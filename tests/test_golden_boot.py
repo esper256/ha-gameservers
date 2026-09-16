@@ -84,9 +84,11 @@ def _has_golden(world: Path) -> bool:
     return True
 
 
-def _write_ha_pin(tmp: Path, version: str) -> Path:
+def _write_ha_pin(tmp: Path, version: str, **extra: object) -> Path:
     options = tmp / "options.json"
-    options.write_text(json.dumps({"minecraft_version": version}), encoding="utf-8")
+    payload: dict[str, object] = {"minecraft_version": version}
+    payload.update(extra)
+    options.write_text(json.dumps(payload), encoding="utf-8")
     os.environ["OPTIONS_FILE"] = str(options)
     return options
 
@@ -265,6 +267,32 @@ class GoldenBootContractTests(unittest.TestCase):
             haos_defaults.prepare_game_command()
             self.assertEqual(_boot_mode(world), "attempt")
             self.assertTrue((world / "server.jar").exists())
+
+    def test_neoforge_pin_edit_starts_new_attempt(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            world = self._env(Path(tmp), "1.21.11")
+            (world / "uploaded_mods").mkdir(parents=True)
+            haos_defaults.prepare_game_command()
+            self._probe(ready=True)
+            haos_defaults.prepare_game_command()
+            self.assertEqual(_boot_mode(world), "golden")
+            _write_ha_pin(Path(tmp), "1.21.11", neoforge_version="beta")
+            _fake_neoforge(Path(os.environ["INSTALL_DIR"]), "1.21.11-beta")
+            self.assertTrue(
+                golden_boot.should_restage(
+                    world, loader="neoforge", version="1.21.11-beta"
+                )
+            )
+            haos_defaults.prepare_game_command()
+            self.assertEqual(_boot_mode(world), "attempt")
+            self.assertEqual(
+                haos_defaults.current_install(world), ("neoforge", "1.21.11-beta")
+            )
+            self.assertFalse(
+                golden_boot.should_restage(
+                    world, loader="neoforge", version="1.21.11-beta"
+                )
+            )
 
     def test_ha_options_json_pin_beats_stale_env(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

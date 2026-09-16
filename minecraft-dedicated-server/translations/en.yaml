@@ -5,6 +5,12 @@ configuration:
   minecraft_version:
     name: Minecraft version
     description: Pinned Java edition version (examples 1.21.1, 1.21.11). Changing this installs that pin beside any previous loader tree.
+  neoforge_version:
+    name: NeoForge version
+    description: latest, beta, or an exact NeoForge id (example 21.11.10-beta). latest is the current stable for this Minecraft version.
+  fabric_loader_version:
+    name: Fabric loader version
+    description: latest, or an exact Fabric loader id (example 0.16.10).
   server_motd:
     name: MOTD
     description: Message of the day in server.properties.

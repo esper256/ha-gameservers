@@ -81,6 +81,8 @@ class MinecraftPluginTests(unittest.TestCase):
             )
         )
         self.assertIn("healthz", str(cfg.get("watchdog") or ""))
+        self.assertEqual(cfg.get("options", {}).get("neoforge_version"), "latest")
+        self.assertEqual(cfg.get("options", {}).get("fabric_loader_version"), "latest")
         self.assertTrue(plugin.restart_when_empty)
         assert plugin.copyparty is not None
         self.assertEqual(plugin.copyparty.port, 8765)
@@ -912,6 +914,177 @@ class HaVersionPinTests(unittest.TestCase):
                 cmd = haos_defaults.prepare_game_command()
             install.assert_called_once()
             self.assertIsNone(cmd)
+
+    def test_loader_pins_default_latest(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            _write_ha_pin(Path(tmp), "1.21.11")
+            self.assertEqual(haos_defaults.neoforge_version(), "latest")
+            self.assertEqual(haos_defaults.fabric_loader_version(), "latest")
+            self.assertEqual(haos_defaults.desired_install_id("neoforge"), "1.21.11")
+            self.assertEqual(haos_defaults.desired_install_id("fabric"), "1.21.11")
+
+    def test_empty_loader_pin_is_latest(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            _write_ha_pin(
+                Path(tmp),
+                "1.21.11",
+                neoforge_version="",
+                fabric_loader_version="",
+            )
+            self.assertEqual(haos_defaults.neoforge_version(), "latest")
+            self.assertEqual(haos_defaults.fabric_loader_version(), "latest")
+
+    def test_invalid_neoforge_pin_fails_loudly(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            _write_ha_pin(Path(tmp), "1.21.11", neoforge_version="../evil")
+            with self.assertRaises(haos_defaults.MinecraftPinError) as raised:
+                haos_defaults.neoforge_version()
+            self.assertIn("neoforge_version", str(raised.exception))
+
+    def test_invalid_fabric_pin_rejects_beta(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            _write_ha_pin(Path(tmp), "1.21.11", fabric_loader_version="beta")
+            with self.assertRaises(haos_defaults.MinecraftPinError):
+                haos_defaults.fabric_loader_version()
+
+    def test_helper_argv_latest_beta_and_exact(self) -> None:
+        fabric = Path("/data/installs/fabric-1.21.11")
+        latest_f = haos_defaults.fabric_install_args(
+            fabric, mc_version="1.21.11", pin="latest"
+        )
+        self.assertTrue(all(not a.startswith("--loader-version=") for a in latest_f))
+        exact_f = haos_defaults.fabric_install_args(
+            fabric, mc_version="1.21.11", pin="0.16.10"
+        )
+        self.assertIn("--loader-version=0.16.10", exact_f)
+        neo = Path("/data/installs/neoforge-1.21.11-beta")
+        self.assertIn(
+            "--neoforge-version=beta",
+            haos_defaults.neoforge_install_args(
+                neo, mc_version="1.21.11", pin="beta"
+            ),
+        )
+        self.assertIn(
+            "--neoforge-version=21.11.10-beta",
+            haos_defaults.neoforge_install_args(
+                neo, mc_version="1.21.11", pin="21.11.10-beta"
+            ),
+        )
+
+    def test_cmd_install_skips_when_marker_matches_pins(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            self._env(Path(tmp), "1.21.11")
+            _write_ha_pin(Path(tmp), "1.21.11", neoforge_version="beta")
+            root = Path(os.environ["INSTALL_DIR"])
+            neo = root / "neoforge-1.21.11-beta"
+            fabric = root / "fabric-1.21.11"
+            neo.mkdir(parents=True)
+            fabric.mkdir(parents=True)
+            (neo / "server.jar").write_bytes(b"starter")
+            (neo / ".install.env").write_text("SERVER=server.jar\n", encoding="utf-8")
+            (fabric / ".install.env").write_text("SERVER=run.sh\n", encoding="utf-8")
+            (root / ".loaders_ready").write_text(
+                "1.21.11 fabric=latest neoforge=beta\n", encoding="utf-8"
+            )
+            with patch.object(haos_defaults, "_run_helper") as helper:
+                self.assertEqual(haos_defaults.cmd_install(), 0)
+            helper.assert_not_called()
+
+    def test_legacy_marker_counts_as_ready_when_pins_are_latest(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            self._env(Path(tmp), "1.21.11")
+            root = Path(os.environ["INSTALL_DIR"])
+            fabric = root / "fabric-1.21.11"
+            fabric.mkdir(parents=True)
+            (fabric / ".install.env").write_text("SERVER=x\n", encoding="utf-8")
+            (root / "neoforge-1.21.11" / ".install.env").write_text(
+                "SERVER=x\n", encoding="utf-8"
+            )
+            (root / ".loaders_ready").write_text("1.21.11\n", encoding="utf-8")
+            with patch.object(haos_defaults, "_run_helper") as helper:
+                self.assertEqual(haos_defaults.cmd_install(), 0)
+            helper.assert_not_called()
+
+    def test_cmd_install_reruns_when_neoforge_pin_changes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            self._env(Path(tmp), "1.21.11")
+            _write_ha_pin(Path(tmp), "1.21.11", neoforge_version="beta")
+            root = Path(os.environ["INSTALL_DIR"])
+            fabric = root / "fabric-1.21.11"
+            fabric.mkdir(parents=True)
+            (fabric / ".install.env").write_text("SERVER=x\n", encoding="utf-8")
+            (root / ".loaders_ready").write_text("1.21.11\n", encoding="utf-8")
+            calls: list[list[str]] = []
+
+            def _capture(args: list[str]) -> None:
+                calls.append(list(args))
+                dest = None
+                for item in args:
+                    if item.startswith("--output-directory="):
+                        dest = Path(item.split("=", 1)[1])
+                assert dest is not None
+                dest.mkdir(parents=True, exist_ok=True)
+                (dest / ".install.env").write_text(
+                    "SERVER=server.jar\n", encoding="utf-8"
+                )
+                (dest / "server.jar").write_bytes(b"starter")
+                (dest / "run.sh").write_text("#!/bin/sh\n", encoding="utf-8")
+
+            with patch.object(haos_defaults, "_run_helper", side_effect=_capture):
+                self.assertEqual(haos_defaults.cmd_install(), 0)
+            neo = [c for c in calls if c[0] == "install-neoforge"][0]
+            self.assertIn("--neoforge-version=beta", neo)
+            self.assertTrue((root / "neoforge-1.21.11-beta").is_dir())
+            self.assertEqual(
+                (root / ".loaders_ready").read_text(encoding="utf-8").strip(),
+                "1.21.11 fabric=latest neoforge=beta",
+            )
+
+    def test_neoforge_beta_restages_to_new_tree(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            world = self._env(Path(tmp), "1.21.11")
+            cmd = haos_defaults.prepare_game_command()
+            self.assertIsNotNone(cmd)
+            self.assertEqual(
+                haos_defaults.current_install(world), ("neoforge", "1.21.11")
+            )
+            _write_ha_pin(Path(tmp), "1.21.11", neoforge_version="beta")
+            beta = Path(os.environ["INSTALL_DIR"]) / "neoforge-1.21.11-beta"
+            beta.mkdir(parents=True)
+            (beta / "server.jar").write_bytes(b"beta")
+            (beta / "run.sh").write_text("#!/bin/sh\n", encoding="utf-8")
+            cmd = haos_defaults.prepare_game_command()
+            self.assertIsNotNone(cmd)
+            self.assertEqual(
+                haos_defaults.current_install(world), ("neoforge", "1.21.11-beta")
+            )
+            self.assertIn(
+                "neoforge-1.21.11-beta", str((world / "server.jar").resolve())
+            )
+
+    def test_parse_install_ref_keeps_loader_pin(self) -> None:
+        self.assertEqual(
+            haos_defaults.parse_install_ref(Path("/data/installs/neoforge-1.21.11")),
+            ("neoforge", "1.21.11"),
+        )
+        self.assertEqual(
+            haos_defaults.parse_install_ref(
+                Path("/data/installs/neoforge-1.21.11-beta")
+            ),
+            ("neoforge", "1.21.11-beta"),
+        )
+        self.assertEqual(
+            haos_defaults.parse_install_ref(
+                Path("/data/installs/neoforge-1.21.11-21.11.10-beta")
+            ),
+            ("neoforge", "1.21.11-21.11.10-beta"),
+        )
+        self.assertEqual(
+            haos_defaults.parse_install_ref(
+                Path("/data/installs/fabric-1.21.1-0.16.10")
+            ),
+            ("fabric", "1.21.1-0.16.10"),
+        )
 
 
 class LaunchLinkTests(unittest.TestCase):

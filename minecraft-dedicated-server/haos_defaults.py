@@ -76,10 +76,34 @@ def env_or_option(key: str, default: str = "") -> str:
     return default
 
 
+_NEOFORGE_PIN_RE = re.compile(
+    r"^(?:latest|beta|[0-9]+(?:\.[0-9]+)+(?:-beta)?)$",
+    re.IGNORECASE,
+)
+_FABRIC_PIN_RE = re.compile(r"^(?:latest|[0-9]+(?:\.[0-9]+)+)$", re.IGNORECASE)
+
+
 def _normalize_mc_version(raw: object) -> str:
     text = str(raw or "").strip()
     if not text or not re.fullmatch(r"[0-9]+(?:\.[0-9]+){1,3}", text):
         return ""
+    return text
+
+
+def _normalize_loader_pin(raw: object, *, kind: str) -> str:
+    """Return latest, beta, or an exact loader id. Empty string if invalid."""
+
+    text = str(raw or "").strip()
+    if not text:
+        return "latest"
+    if "/" in text or "\\" in text or ".." in text:
+        return ""
+    pattern = _NEOFORGE_PIN_RE if kind == "neoforge" else _FABRIC_PIN_RE
+    if not pattern.fullmatch(text):
+        return ""
+    lowered = text.lower()
+    if lowered in {"latest", "beta"}:
+        return lowered
     return text
 
 
@@ -115,6 +139,87 @@ def minecraft_version() -> str:
 def explain_minecraft_pin() -> str:
     version, source = minecraft_pin_source()
     return f"Minecraft pin {version} from {source}"
+
+
+def _loader_pin_from_options(key: str, *, kind: str) -> tuple[str, str]:
+    """Loader pin from options.json only. Missing/empty is latest."""
+
+    path = options_path()
+    if not path.is_file():
+        return "latest", f"default latest (no {path.name})"
+    data, err = _read_options_file()
+    if err:
+        raise MinecraftPinError(f"Cannot read {key} from {path}: {err}")
+    if key not in data:
+        return "latest", f"default latest ({path})"
+    raw = data.get(key)
+    if str(raw or "").strip() == "":
+        return "latest", f"default latest ({path})"
+    pin = _normalize_loader_pin(raw, kind=kind)
+    if not pin:
+        raise MinecraftPinError(f"{key} missing or invalid in {path}: {raw!r}")
+    return pin, str(path)
+
+
+def neoforge_version() -> str:
+    """HA NeoForge pin: latest, beta, or an exact id (example 21.11.10-beta)."""
+
+    return _loader_pin_from_options("neoforge_version", kind="neoforge")[0]
+
+
+def fabric_loader_version() -> str:
+    """HA Fabric loader pin: latest, or an exact loader id."""
+
+    return _loader_pin_from_options("fabric_loader_version", kind="fabric")[0]
+
+
+def loader_pin(loader: str) -> str:
+    if loader == "fabric":
+        return fabric_loader_version()
+    return neoforge_version()
+
+
+def desired_install_id(loader: str, mc_version: str | None = None) -> str:
+    """Folder suffix after ``{loader}-``: MC version, plus pin when not latest."""
+
+    mc = mc_version if mc_version is not None else minecraft_version()
+    pin = loader_pin(loader)
+    if pin == "latest":
+        return mc
+    return f"{mc}-{pin}"
+
+
+def explain_loader_pins() -> str:
+    neo, neo_src = _loader_pin_from_options("neoforge_version", kind="neoforge")
+    fabric, fabric_src = _loader_pin_from_options(
+        "fabric_loader_version", kind="fabric"
+    )
+    return (
+        f"NeoForge pin {neo} from {neo_src}; "
+        f"Fabric loader pin {fabric} from {fabric_src}"
+    )
+
+
+def loaders_ready_token() -> str:
+    return (
+        f"{minecraft_version()} "
+        f"fabric={fabric_loader_version()} "
+        f"neoforge={neoforge_version()}"
+    )
+
+
+def loaders_ready_matches(marker_text: str) -> bool:
+    text = (marker_text or "").strip()
+    if text == loaders_ready_token():
+        return True
+    mc = minecraft_version()
+    if (
+        text == mc
+        and fabric_loader_version() == "latest"
+        and neoforge_version() == "latest"
+    ):
+        return True
+    return False
 
 
 def install_dir() -> Path:
@@ -332,6 +437,7 @@ def write_json(path: Path, payload: dict[str, Any]) -> None:
 
 def cmd_print_version() -> int:
     print(explain_minecraft_pin(), file=sys.stderr, flush=True)
+    print(explain_loader_pins(), file=sys.stderr, flush=True)
     print(minecraft_version(), flush=True)
     return 0
 
@@ -373,17 +479,47 @@ def helper_server_entry(install: Path) -> Path | None:
     return path
 
 
+def fabric_install_args(output: Path, *, mc_version: str, pin: str) -> list[str]:
+    args = [
+        "install-fabric-loader",
+        f"--minecraft-version={mc_version}",
+        f"--output-directory={output}",
+        f"--results-file={_results_file(output)}",
+    ]
+    if pin != "latest":
+        args.append(f"--loader-version={pin}")
+    return args
+
+
+def neoforge_install_args(output: Path, *, mc_version: str, pin: str) -> list[str]:
+    return [
+        "install-neoforge",
+        f"--minecraft-version={mc_version}",
+        f"--neoforge-version={pin}",
+        f"--output-directory={output}",
+        f"--results-file={_results_file(output)}",
+    ]
+
+
 def cmd_install() -> int:
     version = minecraft_version()
+    fabric_pin = fabric_loader_version()
+    neo_pin = neoforge_version()
     print(explain_minecraft_pin(), flush=True)
+    print(explain_loader_pins(), flush=True)
     root = install_dir()
     root.mkdir(parents=True, exist_ok=True)
-    fabric = root / f"fabric-{version}"
-    neoforge = root / f"neoforge-{version}"
+    fabric = install_tree("fabric", desired_install_id("fabric", version))
+    neoforge = install_tree("neoforge", desired_install_id("neoforge", version))
     marker = root / ".loaders_ready"
+    marker_text = ""
+    if marker.is_file():
+        try:
+            marker_text = marker.read_text(encoding="utf-8")
+        except OSError:
+            marker_text = ""
     if (
-        marker.is_file()
-        and marker.read_text(encoding="utf-8").strip() == version
+        loaders_ready_matches(marker_text)
         and fabric.is_dir()
         and neoforge.is_dir()
         and _results_file(fabric).is_file()
@@ -395,25 +531,11 @@ def cmd_install() -> int:
         return 0
     fabric.mkdir(parents=True, exist_ok=True)
     neoforge.mkdir(parents=True, exist_ok=True)
-    _run_helper(
-        [
-            "install-fabric-loader",
-            f"--minecraft-version={version}",
-            f"--output-directory={fabric}",
-            f"--results-file={_results_file(fabric)}",
-        ]
-    )
-    _run_helper(
-        [
-            "install-neoforge",
-            f"--minecraft-version={version}",
-            f"--output-directory={neoforge}",
-            f"--results-file={_results_file(neoforge)}",
-        ]
-    )
+    _run_helper(fabric_install_args(fabric, mc_version=version, pin=fabric_pin))
+    _run_helper(neoforge_install_args(neoforge, mc_version=version, pin=neo_pin))
     if STARTER_JAR.is_file():
         shutil.copy2(STARTER_JAR, neoforge / "server.jar")
-    marker.write_text(f"{version}\n", encoding="utf-8")
+    marker.write_text(f"{loaders_ready_token()}\n", encoding="utf-8")
     print(version, flush=True)
     return 0
 
@@ -446,7 +568,9 @@ def cmd_prepare_world() -> int:
     if loader not in {"neoforge", "fabric"}:
         loader = "neoforge"
     version = minecraft_version()
+    install_id = desired_install_id(loader, version)
     print(explain_minecraft_pin(), flush=True)
+    print(explain_loader_pins(), flush=True)
     write_json(directory / "profile.json", {"loader": loader})
     (directory / "world").mkdir(parents=True, exist_ok=True)
     (directory / "config").mkdir(parents=True, exist_ok=True)
@@ -458,7 +582,7 @@ def cmd_prepare_world() -> int:
     )
     _write_server_properties(directory)
     current = current_install(directory)
-    if current is not None and current != (loader, version):
+    if current is not None and current != (loader, install_id):
         _clear_seeded_infrastructure(directory)
     _seed_infrastructure(directory, loader, version)
     cmd_write_copyparty_banner()
@@ -517,7 +641,7 @@ def _replace_link(src: Path, dest: Path) -> None:
 
 
 def _link_install(directory: Path, loader: str, version: str) -> None:
-    install = install_dir() / f"{loader}-{version}"
+    install = install_tree(loader, version)
     if not install.is_dir():
         print(f"Install tree missing: {install}", file=sys.stderr)
         return
@@ -618,16 +742,23 @@ def install_tree(loader: str, version: str) -> Path:
 
 
 def parse_install_ref(path: Path) -> tuple[str, str] | None:
-    """Read loader+version from an install directory name (``neoforge-1.21.1``)."""
+    """Read loader + install id (``neoforge-1.21.1`` or ``neoforge-1.21.11-beta``)."""
 
     name = path.name
     for loader in ("neoforge", "fabric"):
         prefix = f"{loader}-"
         if not name.startswith(prefix):
             continue
-        version = _normalize_mc_version(name[len(prefix) :])
-        if version:
-            return loader, version
+        rest = name[len(prefix) :]
+        mc, sep, pin = rest.partition("-")
+        if not _normalize_mc_version(mc):
+            continue
+        if not sep:
+            return loader, mc
+        kind = "neoforge" if loader == "neoforge" else "fabric"
+        if not _normalize_loader_pin(pin, kind=kind):
+            continue
+        return loader, rest
     return None
 
 
@@ -686,6 +817,7 @@ def prepare_game_command() -> list[str] | None:
         loader = "neoforge"
     ha_version = minecraft_version()
     print(explain_minecraft_pin(), flush=True)
+    print(explain_loader_pins(), flush=True)
     mode = choose_boot_mode(directory, ha_version=ha_version, loader=loader)
     golden_ref = load_golden_install(directory) if mode == "golden" else None
     if mode == "golden" and golden_ref is None:
@@ -720,7 +852,7 @@ def prepare_game_command() -> list[str] | None:
             proven=True,
         )
     else:
-        version = ha_version
+        version = desired_install_id(loader, ha_version)
         print(
             f"Boot mode=attempt launching={version} ({loader})",
             flush=True,

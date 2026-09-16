@@ -1,5 +1,9 @@
 # Changelog
 
+## 3.14.6
+
+- Configuration can pin NeoForge (`latest`, `beta`, or an exact id such as `21.11.10-beta`) and the Fabric loader (`latest` or an exact id). Each pin keeps its own install tree so the last proven snapshot is not overwritten.
+
 ## 3.14.5
 
 - A finished Copyparty upload now reaches publish (and the empty-server restart). The idle hook used to drop the file path Copyparty writes on stdin.
