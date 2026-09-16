@@ -252,6 +252,42 @@ def _skip_inbox_path(path: Path) -> bool:
     return False
 
 
+def paths_from_xiu_payload(raw: str) -> list[Path]:
+    """Parse Copyparty xiu stdin: newline-joined paths or a JSON list."""
+
+    text = raw.strip()
+    if not text:
+        return []
+    if text[:1] in "[{":
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError:
+            data = None
+        if isinstance(data, dict):
+            data = [data]
+        if isinstance(data, list):
+            out: list[Path] = []
+            for item in data:
+                if isinstance(item, str) and item.strip():
+                    out.append(Path(item))
+                    continue
+                if isinstance(item, dict):
+                    ap = item.get("ap") or item.get("path")
+                    if ap:
+                        out.append(Path(str(ap)))
+            if out:
+                return out
+    return [Path(line.strip()) for line in raw.splitlines() if line.strip()]
+
+
+def publish_from_stdin(raw: str | None = None) -> int:
+    """Publish JARs named on Copyparty xiu stdin (paths or JSON)."""
+
+    if raw is None:
+        raw = sys.stdin.read()
+    return publish_paths(paths_from_xiu_payload(raw))
+
+
 def publish_paths(paths: list[Path]) -> int:
     """Publish each inbox JAR; used by Copyparty xiu (paths on stdin)."""
 
@@ -399,7 +435,7 @@ def main(argv: list[str]) -> int:
     if args.rollback:
         return rollback(args.rollback)
     if not args.path:
-        parser.error("JAR path required")
+        return publish_from_stdin()
     return publish(Path(args.path))
 
 
