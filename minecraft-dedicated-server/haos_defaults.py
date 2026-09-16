@@ -200,9 +200,51 @@ def describe_loader_install(
     return f"Minecraft {mc_version} ({loader} {pin})"
 
 
+def minecraft_implied_by_neoforge(pin: str) -> str | None:
+    """Minecraft encoded in an exact NeoForge id. Channels imply nothing.
+
+    ``21.11.10-beta`` is Minecraft 1.21.11. Four-part ids (``26.1.0.5``)
+    encode Minecraft ``26.1.0``.
+    """
+
+    text = str(pin or "").strip()
+    if not text:
+        return None
+    lowered = text.lower()
+    if lowered in {"latest", "beta"}:
+        return None
+    core = text[: -len("-beta")] if lowered.endswith("-beta") else text
+    parts = core.split(".")
+    if len(parts) < 2 or not all(part.isdigit() for part in parts):
+        return None
+    if len(parts) >= 4:
+        return ".".join(parts[:3])
+    return f"1.{parts[0]}.{parts[1]}"
+
+
+def loader_pin_conflict_message(
+    loader: str, mc_version: str, pin: str
+) -> str | None:
+    """Refuse an exact NeoForge id that belongs to a different Minecraft."""
+
+    if loader != "neoforge":
+        return None
+    implied = minecraft_implied_by_neoforge(pin)
+    if implied is None or implied == mc_version:
+        return None
+    return (
+        f"NeoForge {pin} is for Minecraft {implied}, not {mc_version}. "
+        f"Set Minecraft version to {implied}, or pick a NeoForge pin that "
+        f"matches {mc_version}."
+    )
+
+
 def unavailable_loader_message(loader: str, mc_version: str, pin: str) -> str:
     """Explain a missing loader channel without dumping the helper argv."""
 
+    conflict = loader_pin_conflict_message(loader, mc_version, pin)
+    if conflict:
+        return conflict
     label = "NeoForge" if loader == "neoforge" else "Fabric loader"
     if pin == "beta":
         return (
@@ -226,9 +268,56 @@ def fallback_install_ref(
     if pin != "latest" and install_tree_ready(loader, mc_version):
         return loader, mc_version
     current = current_install(directory)
-    if current is not None and install_tree_ready(current[0], current[1]):
+    desired = (loader, desired_install_id(loader, mc_version))
+    if (
+        current is not None
+        and current != desired
+        and install_tree_ready(current[0], current[1])
+    ):
         return current
     return None
+
+
+def _boot_unavailable_pin(
+    directory: Path, *, loader: str, ha_version: str, pin: str
+) -> tuple[str, str, bool] | None:
+    """Link golden or an existing latest tree. True when golden was restored."""
+
+    from golden_boot import (
+        extra_player_jars,
+        load_golden_install,
+        stage_golden_snapshot,
+        write_boot_session,
+    )
+
+    fallback = fallback_install_ref(
+        directory, loader=loader, mc_version=ha_version, pin=pin
+    )
+    if fallback is None:
+        return None
+    loader, version = fallback
+    if load_golden_install(directory) == fallback:
+        print(
+            f"Keeping last proven snapshot {version} ({loader})",
+            flush=True,
+        )
+        _link_install(directory, loader, version)
+        _ensure_rcon_properties(directory)
+        stage_golden_snapshot(directory)
+        write_boot_session(
+            directory,
+            mode="golden",
+            loader=loader,
+            minecraft_version=version,
+            stock=not extra_player_jars(mods_snapshot_dir(directory)),
+            proven=True,
+        )
+        return loader, version, True
+    print(
+        f"Launching existing {version} ({loader}) for Minecraft {ha_version}",
+        flush=True,
+    )
+    return loader, version, False
 
 
 def explain_loader_pins() -> str:
@@ -480,6 +569,11 @@ def write_json(path: Path, payload: dict[str, Any]) -> None:
 def cmd_print_version() -> int:
     print(explain_minecraft_pin(), file=sys.stderr, flush=True)
     print(explain_loader_pins(), file=sys.stderr, flush=True)
+    conflict = loader_pin_conflict_message(
+        "neoforge", minecraft_version(), neoforge_version()
+    )
+    if conflict:
+        print(conflict, file=sys.stderr, flush=True)
     print(minecraft_version(), flush=True)
     return 0
 
@@ -549,6 +643,9 @@ def cmd_install() -> int:
     neo_pin = neoforge_version()
     print(explain_minecraft_pin(), flush=True)
     print(explain_loader_pins(), flush=True)
+    conflict = loader_pin_conflict_message("neoforge", version, neo_pin)
+    if conflict:
+        raise MinecraftPinError(conflict)
     root = install_dir()
     root.mkdir(parents=True, exist_ok=True)
     fabric = install_tree("fabric", desired_install_id("fabric", version))
@@ -623,10 +720,14 @@ def cmd_prepare_world() -> int:
         f"eula={'true' if eula else 'false'}\n", encoding="utf-8"
     )
     _write_server_properties(directory)
-    current = current_install(directory)
-    if current is not None and current != (loader, install_id):
-        _clear_seeded_infrastructure(directory)
-    _seed_infrastructure(directory, loader, version)
+    conflict = loader_pin_conflict_message(loader, version, loader_pin(loader))
+    if conflict:
+        print(conflict, file=sys.stderr, flush=True)
+    else:
+        current = current_install(directory)
+        if current is not None and current != (loader, install_id):
+            _clear_seeded_infrastructure(directory)
+        _seed_infrastructure(directory, loader, version)
     cmd_write_copyparty_banner()
     return 0
 
@@ -901,7 +1002,16 @@ def prepare_game_command() -> list[str] | None:
             flush=True,
         )
         used_golden_fallback = False
-        if not install_tree_ready(loader, version):
+        conflict = loader_pin_conflict_message(loader, ha_version, pin)
+        if conflict:
+            print(conflict, file=sys.stderr)
+            outcome = _boot_unavailable_pin(
+                directory, loader=loader, ha_version=ha_version, pin=pin
+            )
+            if outcome is None:
+                return None
+            loader, version, used_golden_fallback = outcome
+        elif not install_tree_ready(loader, version):
             print(
                 f"Installing {describe_loader_install(loader, ha_version, pin)} "
                 f"into {install_dir()}…",
@@ -909,7 +1019,7 @@ def prepare_game_command() -> list[str] | None:
             )
             try:
                 cmd_install()
-            except (OSError, subprocess.CalledProcessError) as exc:
+            except (OSError, subprocess.CalledProcessError, MinecraftPinError) as exc:
                 print(
                     unavailable_loader_message(loader, ha_version, pin),
                     file=sys.stderr,
@@ -918,36 +1028,13 @@ def prepare_game_command() -> list[str] | None:
                     f"Install failed for {describe_loader_install(loader, ha_version, pin)}",
                     file=sys.stderr,
                 )
-                fallback = fallback_install_ref(
-                    directory, loader=loader, mc_version=ha_version, pin=pin
+                outcome = _boot_unavailable_pin(
+                    directory, loader=loader, ha_version=ha_version, pin=pin
                 )
-                if fallback is None:
+                if outcome is None:
                     print(str(exc), file=sys.stderr)
                     return None
-                if load_golden_install(directory) == fallback:
-                    loader, version = fallback
-                    print(
-                        f"Keeping last proven snapshot {version} ({loader})",
-                        flush=True,
-                    )
-                    _link_install(directory, loader, version)
-                    _ensure_rcon_properties(directory)
-                    stage_golden_snapshot(directory)
-                    write_boot_session(
-                        directory,
-                        mode="golden",
-                        loader=loader,
-                        minecraft_version=version,
-                        stock=not extra_player_jars(mods_snapshot_dir(directory)),
-                        proven=True,
-                    )
-                    used_golden_fallback = True
-                else:
-                    loader, version = fallback
-                    print(
-                        f"Launching existing {version} ({loader}) for Minecraft {ha_version}",
-                        flush=True,
-                    )
+                loader, version, used_golden_fallback = outcome
         if used_golden_fallback:
             pass
         elif not install_tree_ready(loader, version):

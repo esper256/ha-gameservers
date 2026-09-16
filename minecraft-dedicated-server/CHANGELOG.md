@@ -3,6 +3,7 @@
 ## 3.14.7
 
 - A NeoForge or Fabric pin that does not exist for this Minecraft version (for example `beta` on 1.21.1) no longer crash-loops. The add-on says so and keeps the last proven snapshot, or the already-installed latest tree.
+- An exact NeoForge id that belongs to a different Minecraft (for example `21.11.10-beta` with Minecraft still `1.21.1`) is refused. The helper is not run, AutoModpack is not re-seeded for the wrong game, and the last proven snapshot stays up.
 
 ## 3.14.6
 

@@ -1110,6 +1110,100 @@ class HaVersionPinTests(unittest.TestCase):
             session = json.loads((world / "boot.json").read_text(encoding="utf-8"))
             self.assertEqual(session.get("mode"), "golden")
 
+    def test_neoforge_id_implies_minecraft(self) -> None:
+        self.assertEqual(
+            haos_defaults.minecraft_implied_by_neoforge("21.11.10-beta"),
+            "1.21.11",
+        )
+        self.assertEqual(
+            haos_defaults.minecraft_implied_by_neoforge("21.1.209"),
+            "1.21.1",
+        )
+        self.assertEqual(
+            haos_defaults.minecraft_implied_by_neoforge("26.1.0.5"),
+            "26.1.0",
+        )
+        self.assertIsNone(haos_defaults.minecraft_implied_by_neoforge("beta"))
+        self.assertIsNone(haos_defaults.minecraft_implied_by_neoforge("latest"))
+        self.assertIsNone(
+            haos_defaults.loader_pin_conflict_message(
+                "neoforge", "1.21.11", "21.11.10-beta"
+            )
+        )
+        self.assertIsNone(
+            haos_defaults.loader_pin_conflict_message(
+                "neoforge", "1.21.1", "21.1.209"
+            )
+        )
+        self.assertIsNone(
+            haos_defaults.loader_pin_conflict_message("neoforge", "1.21.1", "beta")
+        )
+        text = haos_defaults.loader_pin_conflict_message(
+            "neoforge", "1.21.1", "21.11.10-beta"
+        )
+        assert text is not None
+        self.assertIn("1.21.11", text)
+        self.assertIn("1.21.1", text)
+        self.assertIn("21.11.10-beta", text)
+
+    def test_mismatched_neoforge_pin_falls_back_even_if_tree_exists(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            world = self._env(Path(tmp), "1.21.1")
+            _write_ha_pin(Path(tmp), "1.21.1", neoforge_version="21.11.10-beta")
+            bad = Path(os.environ["INSTALL_DIR"]) / "neoforge-1.21.1-21.11.10-beta"
+            bad.mkdir(parents=True)
+            (bad / "server.jar").write_bytes(b"wrong-mc")
+            (bad / "run.sh").write_text("#!/bin/sh\n", encoding="utf-8")
+            with patch.object(haos_defaults, "cmd_install") as install:
+                cmd = haos_defaults.prepare_game_command()
+            install.assert_not_called()
+            self.assertIsNotNone(cmd)
+            self.assertEqual(
+                haos_defaults.current_install(world), ("neoforge", "1.21.1")
+            )
+            self.assertNotIn(
+                "21.11.10-beta", str((world / "server.jar").resolve())
+            )
+
+    def test_mismatched_neoforge_pin_does_not_boot_wrong_tree_alone(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            world = self._env(Path(tmp), "1.21.1")
+            shutil.rmtree(Path(os.environ["INSTALL_DIR"]) / "neoforge-1.21.1")
+            shutil.rmtree(Path(os.environ["INSTALL_DIR"]) / "neoforge-1.21.11")
+            _write_ha_pin(Path(tmp), "1.21.1", neoforge_version="21.11.10-beta")
+            bad = Path(os.environ["INSTALL_DIR"]) / "neoforge-1.21.1-21.11.10-beta"
+            bad.mkdir(parents=True)
+            (bad / "server.jar").write_bytes(b"wrong-mc")
+            (bad / "run.sh").write_text("#!/bin/sh\n", encoding="utf-8")
+            haos_defaults._link_install(world, "neoforge", "1.21.1-21.11.10-beta")
+            with patch.object(haos_defaults, "cmd_install") as install:
+                cmd = haos_defaults.prepare_game_command()
+            install.assert_not_called()
+            self.assertIsNone(cmd)
+
+    def test_prepare_world_skips_seed_on_neoforge_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            world = self._env(Path(tmp), "1.21.1")
+            uploaded = world / "uploaded_mods"
+            (uploaded / "automodpack.jar").write_bytes(b"keep-me")
+            os.chmod(uploaded / "automodpack.jar", 0o444)
+            haos_defaults._link_install(world, "neoforge", "1.21.1")
+            _write_ha_pin(Path(tmp), "1.21.1", neoforge_version="21.11.10-beta")
+            with patch.object(haos_defaults, "_seed_infrastructure") as seed:
+                self.assertEqual(haos_defaults.cmd_prepare_world(), 0)
+            seed.assert_not_called()
+            self.assertEqual((uploaded / "automodpack.jar").read_bytes(), b"keep-me")
+
+    def test_cmd_install_refuses_mismatched_neoforge(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            self._env(Path(tmp), "1.21.1")
+            _write_ha_pin(Path(tmp), "1.21.1", neoforge_version="21.11.10-beta")
+            with patch.object(haos_defaults, "_run_helper") as helper:
+                with self.assertRaises(haos_defaults.MinecraftPinError) as raised:
+                    haos_defaults.cmd_install()
+            helper.assert_not_called()
+            self.assertIn("1.21.11", str(raised.exception))
+
     def test_parse_install_ref_keeps_loader_pin(self) -> None:
         self.assertEqual(
             haos_defaults.parse_install_ref(Path("/data/installs/neoforge-1.21.11")),
