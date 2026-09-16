@@ -721,6 +721,10 @@ def prepare_game_command() -> list[str] | None:
         )
     else:
         version = ha_version
+        print(
+            f"Boot mode=attempt launching={version} ({loader})",
+            flush=True,
+        )
         if not install_tree_ready(loader, version):
             print(
                 f"Installing Minecraft {version} ({loader}) into {install_dir()}…",

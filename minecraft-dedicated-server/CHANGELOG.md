@@ -6,7 +6,7 @@
 
 ## 3.14.3
 
-- The Minecraft version on Configuration lives only in `/data/options.json`. Logs print that pin and its file path. Compose can still set `MINECRAFT_VERSION` when the file is absent. A crash still boots the last proven snapshot; there is no second saved copy of the pin.
+- The Minecraft version on Configuration is read from the live Home Assistant Supervisor API, not only `/data/options.json`. Logs now say which source supplied the pin (API, options file, env, or default).
 
 ## 3.14.2
 
