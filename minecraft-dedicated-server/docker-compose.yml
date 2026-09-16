@@ -22,7 +22,6 @@ services:
       SERVER_MOTD: A Minecraft Server
       SERVER_SLOTS: "8"
       ONLINE_MODE: "true"
-      WHITE_LIST: "true"
       EULA: "true"
       PUBLISHER_PASSWORD: changeme
       JAVA_OPTS: "-Xms2G -Xmx4G"

@@ -24,6 +24,7 @@ BASE = ROOT / "game-server-base"
 sys.path.insert(0, str(MC))
 sys.path.insert(0, str(BASE))
 
+from game_server.config import load_config  # noqa: E402
 from game_server.plugin import load_plugin  # noqa: E402
 from game_server.version import SUPERVISOR_VERSION  # noqa: E402
 import haos_defaults  # noqa: E402
@@ -85,6 +86,7 @@ class MinecraftPluginTests(unittest.TestCase):
         self.assertEqual(cfg.get("options", {}).get("fabric_loader_version"), "latest")
         self.assertNotIn("white_list", cfg.get("options") or {})
         self.assertNotIn("white_list", cfg.get("schema") or {})
+        self.assertNotIn("WHITE_LIST", plugin.env_options)
         self.assertTrue(plugin.restart_when_empty)
         assert plugin.copyparty is not None
         self.assertEqual(plugin.copyparty.port, 8765)
@@ -754,6 +756,8 @@ class HaVersionPinTests(unittest.TestCase):
             "JAVA_OPTS",
             "OPTIONS_FILE",
             "SUPERVISOR_TOKEN",
+            "EULA",
+            "ONLINE_MODE",
         ):
             os.environ.pop(key, None)
 
@@ -783,6 +787,65 @@ class HaVersionPinTests(unittest.TestCase):
         os.chmod(uploaded / "cool_creepers.jar", 0o444)
         return world
 
+    def test_every_ha_option_keeps_json_false_and_zero(self) -> None:
+        import yaml
+
+        cfg = yaml.safe_load(
+            (MC / "config.yaml").read_text(encoding="utf-8")
+        )
+        schema = cfg["schema"]
+        payload: dict[str, object] = dict(cfg["options"])
+        bool_keys = [key for key, spec in schema.items() if spec == "bool"]
+        int_keys = [
+            key
+            for key, spec in schema.items()
+            if str(spec).startswith("int")
+        ]
+        for key in bool_keys:
+            payload[key] = False
+        for key in int_keys:
+            payload[key] = 0
+        payload["minecraft_version"] = "1.21.1"
+        payload["server_motd"] = "Pinned MOTD"
+        payload["publisher_password"] = "secret-pass"
+        payload["java_opts"] = "-Xms1G -Xmx2G"
+        payload["backup_retention"] = "minimal"
+        payload["neoforge_version"] = "21.1.209"
+        payload["fabric_loader_version"] = "0.16.10"
+        with tempfile.TemporaryDirectory() as tmp:
+            options = Path(tmp) / "options.json"
+            options.write_text(json.dumps(payload), encoding="utf-8")
+            os.environ["OPTIONS_FILE"] = str(options)
+            for leftover in ("ONLINE_MODE", "EULA", "SERVER_MOTD"):
+                os.environ[leftover] = "FromEnv"
+            try:
+                for key in bool_keys:
+                    self.assertEqual(
+                        haos_defaults.env_or_option(key, "true"),
+                        "false",
+                        key,
+                    )
+                self.assertEqual(haos_defaults.env_or_option("server_slots", "8"), "0")
+                self.assertEqual(
+                    haos_defaults.env_or_option("server_motd", "A Minecraft Server"),
+                    "Pinned MOTD",
+                )
+                self.assertEqual(haos_defaults.neoforge_version(), "21.1.209")
+                self.assertEqual(haos_defaults.fabric_loader_version(), "0.16.10")
+                for leftover in ("ONLINE_MODE", "EULA", "SERVER_MOTD"):
+                    os.environ.pop(leftover, None)
+                loaded = load_config()
+                for key in bool_keys:
+                    if hasattr(loaded, key):
+                        self.assertFalse(getattr(loaded, key), key)
+                for key in int_keys:
+                    if hasattr(loaded, key):
+                        self.assertEqual(getattr(loaded, key), 0, key)
+                self.assertEqual(loaded.backup_retention, "minimal")
+            finally:
+                for leftover in ("ONLINE_MODE", "EULA", "SERVER_MOTD"):
+                    os.environ.pop(leftover, None)
+
     def test_env_or_option_honors_json_false(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             _write_ha_pin(Path(tmp), "1.21.1", online_mode=False)
@@ -800,6 +863,23 @@ class HaVersionPinTests(unittest.TestCase):
             self.assertIn("white-list=false", props)
             self.assertIn("enforce-whitelist=false", props)
             self.assertNotIn("white-list=true", props)
+
+    def test_prepare_world_honors_eula_and_online_mode_false(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            world = self._env(Path(tmp), "1.21.1")
+            _write_ha_pin(Path(tmp), "1.21.1", eula=False, online_mode=False)
+            os.environ["EULA"] = "true"
+            os.environ["ONLINE_MODE"] = "true"
+            with patch.object(haos_defaults, "_seed_infrastructure", return_value=None):
+                self.assertEqual(haos_defaults.cmd_prepare_world(), 0)
+            os.environ.pop("EULA", None)
+            os.environ.pop("ONLINE_MODE", None)
+            self.assertEqual(
+                (world / "eula.txt").read_text(encoding="utf-8").strip(),
+                "eula=false",
+            )
+            props = (world / "server.properties").read_text(encoding="utf-8")
+            self.assertIn("online-mode=false", props)
 
     def test_prepare_and_run_attempt_the_ha_pin(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
