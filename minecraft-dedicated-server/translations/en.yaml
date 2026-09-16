@@ -20,9 +20,6 @@ configuration:
   online_mode:
     name: Online mode
     description: Require Microsoft accounts (recommended).
-  white_list:
-    name: Whitelist
-    description: Only allow listed players (recommended).
   eula:
     name: Accept Minecraft EULA
     description: Required to run the official dedicated server.

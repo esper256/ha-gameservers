@@ -83,6 +83,8 @@ class MinecraftPluginTests(unittest.TestCase):
         self.assertIn("healthz", str(cfg.get("watchdog") or ""))
         self.assertEqual(cfg.get("options", {}).get("neoforge_version"), "latest")
         self.assertEqual(cfg.get("options", {}).get("fabric_loader_version"), "latest")
+        self.assertNotIn("white_list", cfg.get("options") or {})
+        self.assertNotIn("white_list", cfg.get("schema") or {})
         self.assertTrue(plugin.restart_when_empty)
         assert plugin.copyparty is not None
         self.assertEqual(plugin.copyparty.port, 8765)
@@ -780,6 +782,24 @@ class HaVersionPinTests(unittest.TestCase):
         (uploaded / "cool_creepers.jar").write_bytes(b"mod")
         os.chmod(uploaded / "cool_creepers.jar", 0o444)
         return world
+
+    def test_env_or_option_honors_json_false(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            _write_ha_pin(Path(tmp), "1.21.1", online_mode=False)
+            self.assertEqual(
+                haos_defaults.env_or_option("online_mode", "true"), "false"
+            )
+
+    def test_prepare_world_disables_whitelist(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            world = self._env(Path(tmp), "1.21.1")
+            _write_ha_pin(Path(tmp), "1.21.1", white_list=True)
+            with patch.object(haos_defaults, "_seed_infrastructure", return_value=None):
+                self.assertEqual(haos_defaults.cmd_prepare_world(), 0)
+            props = (world / "server.properties").read_text(encoding="utf-8")
+            self.assertIn("white-list=false", props)
+            self.assertIn("enforce-whitelist=false", props)
+            self.assertNotIn("white-list=true", props)
 
     def test_prepare_and_run_attempt_the_ha_pin(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -68,8 +68,13 @@ def env_or_option(key: str, default: str = "") -> str:
     """HA ``options.json`` wins over a leftover process env value."""
 
     opt = options()
-    if key in opt and str(opt.get(key) or "").strip():
-        return str(opt[key]).strip()
+    if key in opt:
+        raw = opt.get(key)
+        if isinstance(raw, bool):
+            return "true" if raw else "false"
+        text = str(raw if raw is not None else "").strip()
+        if text:
+            return text
     env_key = key.upper()
     if os.environ.get(env_key):
         return str(os.environ[env_key]).strip()
@@ -593,7 +598,6 @@ def _write_server_properties(directory: Path) -> None:
     motd = env_or_option("server_motd", "A Minecraft Server")
     slots = env_or_option("server_slots", "8")
     online = env_or_option("online_mode", "true").lower()
-    whitelist = env_or_option("white_list", "true").lower()
     port = os.environ.get("SERVER_PORT") or ""
     rcon_port = os.environ.get("RCON_PORT") or ""
     password = _ensure_rcon_password()
@@ -601,7 +605,8 @@ def _write_server_properties(directory: Path) -> None:
         f"motd={motd}",
         f"max-players={slots}",
         f"online-mode={'true' if online in {'1', 'true', 'yes', 'on'} else 'false'}",
-        f"white-list={'true' if whitelist in {'1', 'true', 'yes', 'on'} else 'false'}",
+        "white-list=false",
+        "enforce-whitelist=false",
         "server-ip=0.0.0.0",
         "level-name=world",
         "enable-status=true",

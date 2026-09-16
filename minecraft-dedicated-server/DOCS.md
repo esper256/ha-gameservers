@@ -35,7 +35,7 @@ Do not upload AutoModpack or Fabric API — those are protected.
 | Minecraft version | Pin (do not chase latest) |
 | Upload page password | Login for the mod-upload page (username `mods`) |
 | EULA | Must stay true |
-| Online mode / whitelist | Recommended on |
+| Online mode | Recommended on (Microsoft accounts) |
 | Java options | Heap; 4 GB host RAM is a practical floor |
 | Network (Minecraft Java) | Host port you mapped for the game (add-on Network settings) |
 | Network (upload page) | Container 8765, host port from Network, LAN only |

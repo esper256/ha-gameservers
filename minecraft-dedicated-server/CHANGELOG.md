@@ -1,5 +1,9 @@
 # Changelog
 
+## 3.14.8
+
+- The whitelist toggle is gone. There was no way to add players, and turning it off did not work (JSON `false` was ignored). The server now writes `white-list=false`. Online mode is the access check.
+
 ## 3.14.7
 
 - A user start or Configuration restart always tries the requested Minecraft version, loader pin, and uploaded mods. The last proven snapshot is used only when the supervisor restarts the game after a crash.
