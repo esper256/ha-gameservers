@@ -55,9 +55,8 @@ env_options:
   - MINECRAFT_VERSION
   - PUBLISHER_PASSWORD
   - SERVER_MOTD
-  - EULA
-  - ONLINE_MODE
-  - WHITE_LIST
+      - EULA
+      - ONLINE_MODE
 ui_theme:
   bg: "#1a140c"
   panel: "#2a2116"
