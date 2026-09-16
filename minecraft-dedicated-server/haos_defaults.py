@@ -33,6 +33,15 @@ PROTECTED_MOD_IDS = frozenset(
 SEALED_MODE = 0o444
 UPLOADED_MODS = "uploaded_mods"
 MODS_SNAPSHOT = "mods"
+KQUEUE_LOG4J = "log4j2-kqueue.xml"
+_KQUEUE_LOG4J_XML = """\
+<?xml version="1.0" encoding="UTF-8"?>
+<Configuration>
+  <Loggers>
+    <Logger name="io.netty.channel.kqueue" level="warn" additivity="false"/>
+  </Loggers>
+</Configuration>
+"""
 
 
 class MinecraftPinError(RuntimeError):
@@ -664,6 +673,23 @@ def install_tree_ready(loader: str, version: str) -> bool:
     return (install / "server.jar").exists() or (install / "run.sh").exists()
 
 
+def write_kqueue_log4j(directory: Path) -> Path:
+    """Overlay that keeps Netty's macOS kqueue probe out of debug.log on Linux."""
+
+    path = directory / KQUEUE_LOG4J
+    path.write_text(_KQUEUE_LOG4J_XML, encoding="utf-8")
+    return path.resolve()
+
+
+def linux_netty_jvm_args(directory: Path) -> list[str]:
+    """1.21.11 probes kqueue; Log4j DebugFile then crashes formatting that expected miss."""
+
+    overlay = write_kqueue_log4j(directory)
+    return [
+        f"-Dlog4j2.configurationFile=classpath:log4j2.xml,{overlay.as_uri()}",
+    ]
+
+
 def prepare_game_command() -> list[str] | None:
     """Link install X + stage mods, or restore the last proven snapshot after a crash."""
 
@@ -785,7 +811,7 @@ def prepare_game_command() -> list[str] | None:
                 )
     install = install_tree(loader, version)
     java_opts = env_or_option("java_opts", "-Xms2G -Xmx4G")
-    cmd = ["java", *java_opts.split()]
+    cmd = ["java", *linux_netty_jvm_args(directory), *java_opts.split()]
     if loader == "fabric":
         launch = fabric_launcher_jar(install, directory)
         if launch is None:

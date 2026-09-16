@@ -702,6 +702,18 @@ class HaVersionPinTests(unittest.TestCase):
             self.assertFalse((world / "mods").exists())
             cmd = haos_defaults.prepare_game_command()
             self.assertIsNotNone(cmd)
+            assert cmd is not None
+            self.assertTrue(
+                any(
+                    part.startswith("-Dlog4j2.configurationFile=")
+                    and "log4j2-kqueue.xml" in part
+                    for part in cmd
+                ),
+                cmd,
+            )
+            overlay = world / "log4j2-kqueue.xml"
+            self.assertTrue(overlay.is_file())
+            self.assertIn("io.netty.channel.kqueue", overlay.read_text(encoding="utf-8"))
             self.assertEqual(haos_defaults.current_install(world), ("neoforge", "1.21.11"))
             self.assertTrue((world / "server.jar").exists())
             self.assertTrue((Path(os.environ["INSTALL_DIR"]) / "neoforge-1.21.1").is_dir())
@@ -816,6 +828,17 @@ class HaVersionPinTests(unittest.TestCase):
             profile = json.loads((world / "profile.json").read_text(encoding="utf-8"))
             self.assertEqual(profile["loader"], "neoforge")
             self.assertNotIn("minecraft_version", profile)
+
+    def test_launch_quiets_linux_kqueue_probe(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            world = self._env(Path(tmp), "1.21.11")
+            cmd = haos_defaults.prepare_game_command()
+            self.assertIsNotNone(cmd)
+            assert cmd is not None
+            joined = " ".join(cmd)
+            self.assertIn("log4j2.configurationFile", joined)
+            self.assertIn("classpath:log4j2.xml", joined)
+            self.assertIn("io.netty.channel.kqueue", (world / "log4j2-kqueue.xml").read_text())
 
     def test_missing_install_fails_clearly(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
