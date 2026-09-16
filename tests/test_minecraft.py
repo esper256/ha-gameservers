@@ -1062,6 +1062,54 @@ class HaVersionPinTests(unittest.TestCase):
                 "neoforge-1.21.11-beta", str((world / "server.jar").resolve())
             )
 
+    def test_describe_loader_install_does_not_look_like_mc_version(self) -> None:
+        self.assertEqual(
+            haos_defaults.describe_loader_install("neoforge", "1.21.1", "beta"),
+            "Minecraft 1.21.1 (neoforge beta)",
+        )
+        self.assertEqual(
+            haos_defaults.describe_loader_install("neoforge", "1.21.1", "latest"),
+            "Minecraft 1.21.1 (neoforge)",
+        )
+
+    def test_unavailable_beta_message_names_mc_version(self) -> None:
+        text = haos_defaults.unavailable_loader_message("neoforge", "1.21.1", "beta")
+        self.assertIn("1.21.1", text)
+        self.assertIn("1.21.11", text)
+        self.assertNotIn("1.21.1-beta", text)
+
+    def test_beta_unavailable_falls_back_to_existing_latest(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            world = self._env(Path(tmp), "1.21.1")
+            _write_ha_pin(Path(tmp), "1.21.1", neoforge_version="beta")
+            err = subprocess.CalledProcessError(2, ["install-neoforge"])
+            with patch.object(haos_defaults, "cmd_install", side_effect=err):
+                cmd = haos_defaults.prepare_game_command()
+            self.assertIsNotNone(cmd)
+            self.assertEqual(
+                haos_defaults.current_install(world), ("neoforge", "1.21.1")
+            )
+
+    def test_beta_unavailable_keeps_golden(self) -> None:
+        import golden_boot
+
+        with tempfile.TemporaryDirectory() as tmp:
+            world = self._env(Path(tmp), "1.21.1")
+            self.assertIsNotNone(haos_defaults.prepare_game_command())
+            golden_boot.note_ready(world)
+            golden_boot.note_player(world)
+            self.assertTrue((world / "golden_install").exists())
+            _write_ha_pin(Path(tmp), "1.21.1", neoforge_version="beta")
+            err = subprocess.CalledProcessError(2, ["install-neoforge"])
+            with patch.object(haos_defaults, "cmd_install", side_effect=err):
+                cmd = haos_defaults.prepare_game_command()
+            self.assertIsNotNone(cmd)
+            self.assertEqual(
+                haos_defaults.current_install(world), ("neoforge", "1.21.1")
+            )
+            session = json.loads((world / "boot.json").read_text(encoding="utf-8"))
+            self.assertEqual(session.get("mode"), "golden")
+
     def test_parse_install_ref_keeps_loader_pin(self) -> None:
         self.assertEqual(
             haos_defaults.parse_install_ref(Path("/data/installs/neoforge-1.21.11")),

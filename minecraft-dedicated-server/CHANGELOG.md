@@ -1,5 +1,9 @@
 # Changelog
 
+## 3.14.7
+
+- A NeoForge or Fabric pin that does not exist for this Minecraft version (for example `beta` on 1.21.1) no longer crash-loops. The add-on says so and keeps the last proven snapshot, or the already-installed latest tree.
+
 ## 3.14.6
 
 - Configuration can pin NeoForge (`latest`, `beta`, or an exact id such as `21.11.10-beta`) and the Fabric loader (`latest` or an exact id). Each pin keeps its own install tree so the last proven snapshot is not overwritten.

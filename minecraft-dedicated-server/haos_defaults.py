@@ -189,6 +189,48 @@ def desired_install_id(loader: str, mc_version: str | None = None) -> str:
     return f"{mc}-{pin}"
 
 
+def describe_loader_install(
+    loader: str, mc_version: str, pin: str | None = None
+) -> str:
+    """Human label: Minecraft 1.21.11 (neoforge beta), not 1.21.11-beta."""
+
+    pin = loader_pin(loader) if pin is None else pin
+    if pin == "latest":
+        return f"Minecraft {mc_version} ({loader})"
+    return f"Minecraft {mc_version} ({loader} {pin})"
+
+
+def unavailable_loader_message(loader: str, mc_version: str, pin: str) -> str:
+    """Explain a missing loader channel without dumping the helper argv."""
+
+    label = "NeoForge" if loader == "neoforge" else "Fabric loader"
+    if pin == "beta":
+        return (
+            f"No {label} beta for Minecraft {mc_version}. "
+            f"Use latest, an exact {label} id, or a Minecraft version that "
+            f"publishes a {label} beta (for example 1.21.11)."
+        )
+    return f"Could not install {label} {pin} for Minecraft {mc_version}."
+
+
+def fallback_install_ref(
+    directory: Path, *, loader: str, mc_version: str, pin: str
+) -> tuple[str, str] | None:
+    """Last proven tree, else an already-installed latest tree for this MC."""
+
+    from golden_boot import load_golden_install
+
+    golden = load_golden_install(directory)
+    if golden is not None and install_tree_ready(golden[0], golden[1]):
+        return golden
+    if pin != "latest" and install_tree_ready(loader, mc_version):
+        return loader, mc_version
+    current = current_install(directory)
+    if current is not None and install_tree_ready(current[0], current[1]):
+        return current
+    return None
+
+
 def explain_loader_pins() -> str:
     neo, neo_src = _loader_pin_from_options("neoforge_version", kind="neoforge")
     fabric, fabric_src = _loader_pin_from_options(
@@ -852,29 +894,70 @@ def prepare_game_command() -> list[str] | None:
             proven=True,
         )
     else:
+        pin = loader_pin(loader)
         version = desired_install_id(loader, ha_version)
         print(
-            f"Boot mode=attempt launching={version} ({loader})",
+            f"Boot mode=attempt launching {describe_loader_install(loader, ha_version, pin)}",
             flush=True,
         )
+        used_golden_fallback = False
         if not install_tree_ready(loader, version):
             print(
-                f"Installing Minecraft {version} ({loader}) into {install_dir()}…",
+                f"Installing {describe_loader_install(loader, ha_version, pin)} "
+                f"into {install_dir()}…",
                 file=sys.stderr,
             )
             try:
                 cmd_install()
             except (OSError, subprocess.CalledProcessError) as exc:
-                print(f"Install failed for Minecraft {version}: {exc}", file=sys.stderr)
-                return None
-        if not install_tree_ready(loader, version):
+                print(
+                    unavailable_loader_message(loader, ha_version, pin),
+                    file=sys.stderr,
+                )
+                print(
+                    f"Install failed for {describe_loader_install(loader, ha_version, pin)}",
+                    file=sys.stderr,
+                )
+                fallback = fallback_install_ref(
+                    directory, loader=loader, mc_version=ha_version, pin=pin
+                )
+                if fallback is None:
+                    print(str(exc), file=sys.stderr)
+                    return None
+                if load_golden_install(directory) == fallback:
+                    loader, version = fallback
+                    print(
+                        f"Keeping last proven snapshot {version} ({loader})",
+                        flush=True,
+                    )
+                    _link_install(directory, loader, version)
+                    _ensure_rcon_properties(directory)
+                    stage_golden_snapshot(directory)
+                    write_boot_session(
+                        directory,
+                        mode="golden",
+                        loader=loader,
+                        minecraft_version=version,
+                        stock=not extra_player_jars(mods_snapshot_dir(directory)),
+                        proven=True,
+                    )
+                    used_golden_fallback = True
+                else:
+                    loader, version = fallback
+                    print(
+                        f"Launching existing {version} ({loader}) for Minecraft {ha_version}",
+                        flush=True,
+                    )
+        if used_golden_fallback:
+            pass
+        elif not install_tree_ready(loader, version):
             print(
-                f"Install tree missing for Minecraft {version} ({loader}): "
+                f"Install tree missing for {describe_loader_install(loader, ha_version, pin)}: "
                 f"{install_tree(loader, version)}",
                 file=sys.stderr,
             )
             return None
-        if should_restage(directory, loader=loader, version=version):
+        elif should_restage(directory, loader=loader, version=version):
             print(
                 f"Boot mode=attempt launching={version} ({loader})",
                 flush=True,

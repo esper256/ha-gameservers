@@ -7,7 +7,7 @@ configuration:
     description: Pinned Java edition version (examples 1.21.1, 1.21.11). Changing this installs that pin beside any previous loader tree.
   neoforge_version:
     name: NeoForge version
-    description: latest, beta, or an exact NeoForge id (example 21.11.10-beta). latest is the current stable for this Minecraft version.
+    description: latest, beta, or an exact NeoForge id (example 21.11.10-beta). beta exists only for some Minecraft versions (1.21.11 yes, 1.21.1 no).
   fabric_loader_version:
     name: Fabric loader version
     description: latest, or an exact Fabric loader id (example 0.16.10).
