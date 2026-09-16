@@ -4118,6 +4118,46 @@ class ProcessStopTests(unittest.TestCase):
             # Must SIGTERM promptly — not burn most of the 30s waiting voluntarily.
             self.assertLess(elapsed, 10)
 
+    def test_start_exports_game_start_reason(self) -> None:
+        plugin = load_plugin(FIXTURE)
+        plugin.stop_stdin_commands = []
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            out = root / "reason.txt"
+            cfg = SupervisorConfig(
+                drop_privileges=False,
+                status_http_enabled=False,
+                backup_enabled=False,
+                ha_notifications=False,
+                state_dir=str(root / "state"),
+                install_dir=str(root / "game"),
+                backup_dir=str(root / "backups"),
+                steamcmd_dir=str(root / "steamcmd"),
+                game_options={
+                    "data_dir": str(root / "world"),
+                    "logs_dir": str(root / "logs"),
+                },
+            )
+            (root / "world").mkdir()
+            (root / "logs").mkdir()
+            plugin.data_dir = str(root / "world")
+            plugin.logs_dir = str(root / "logs")
+            plugin.working_dir = str(root / "game")
+            (root / "game").mkdir()
+            plugin.executable = [
+                sys.executable,
+                "-c",
+                (
+                    "import os\n"
+                    f"open({str(out)!r}, 'w').write(os.environ.get('GAME_START_REASON', ''))\n"
+                ),
+            ]
+            mgr = ProcessManager(plugin, cfg)
+            mgr.start(reason="crash")
+            self.assertEqual(mgr.wait(timeout=5), 0)
+            self.assertEqual(out.read_text(encoding="utf-8"), "crash")
+            mgr.stop()
+
     def test_stop_escalates_when_process_ignores_stdin(self) -> None:
         plugin = load_plugin(FIXTURE)
         plugin.stop_timeout_seconds = 8
