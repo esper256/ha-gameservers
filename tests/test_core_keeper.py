@@ -3,13 +3,18 @@
 
 from __future__ import annotations
 
+import gzip
 import importlib.util
+import io
 import json
 import os
 import sys
 import tempfile
 import unittest
+import zipfile
+from dataclasses import replace
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 PLUGIN = ROOT / "core-keeper-dedicated-server" / "games" / "game.yaml"
@@ -22,6 +27,8 @@ sys.path.insert(0, str(ROOT / "game-server-base"))
 from game_server.plugin import load_plugin  # noqa: E402
 from game_server.process_manager import ProcessManager  # noqa: E402
 from game_server.config import SupervisorConfig  # noqa: E402
+from game_server.supervisor import GameServerSupervisor  # noqa: E402
+from game_server.status_http import _ui_view, render_status_html  # noqa: E402
 from game_server.world_save import locate_active_world  # noqa: E402
 from game_server.log_tools import LogToolbox  # noqa: E402
 from game_server.monitor import LogMonitor  # noqa: E402
@@ -653,6 +660,248 @@ class CoreKeeperBootJoinPatternTests(unittest.TestCase):
             self.assertTrue(mismatch)
             self.assertEqual(mismatch["hits"], 0)
             self.assertEqual(mismatch["examples"], [])
+
+
+def _gzip_bytes(payload: bytes) -> bytes:
+    buf = io.BytesIO()
+    with gzip.GzipFile(fileobj=buf, mode="wb", mtime=0) as fh:
+        fh.write(payload)
+    return buf.getvalue()
+
+
+def _zip_bytes() -> bytes:
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("0.world.gzip", _gzip_bytes(b"nested-world"))
+    return buf.getvalue()
+
+
+class _Alive:
+    def poll(self) -> None:
+        return None
+
+
+def _ck_supervisor(tmp: Path, *, world_index: int = 0) -> GameServerSupervisor:
+    plugin = load_plugin(PLUGIN)
+    world = tmp / "world"
+    logs = tmp / "logs"
+    game = tmp / "game"
+    for path in (world, logs, game):
+        path.mkdir()
+    cfg = SupervisorConfig(
+        drop_privileges=False,
+        status_http_enabled=False,
+        backup_enabled=False,
+        ha_notifications=False,
+        update_on_start=False,
+        auto_update_interval_minutes=0,
+        backup_min_source_bytes=1,
+        min_free_disk_mb=1,
+        crash_restart_delay_seconds=0,
+        state_dir=str(tmp / "state"),
+        install_dir=str(game),
+        backup_dir=str(tmp / "backups"),
+        steamcmd_dir=str(tmp / "steamcmd"),
+        game_options={
+            "data_dir": str(world),
+            "logs_dir": str(logs),
+            "world_index": world_index,
+            "world_name": "World",
+        },
+    )
+    return GameServerSupervisor(plugin, cfg)
+
+
+class CoreKeeperWorldUploadTests(unittest.TestCase):
+    def test_plugin_declares_single_gzip_world_upload(self) -> None:
+        plugin = load_plugin(PLUGIN)
+        spec = plugin.world_upload
+        self.assertIsNotNone(spec)
+        assert spec is not None
+        self.assertEqual(spec.allowed_suffixes, (".world.gzip",))
+        self.assertEqual(spec.max_bytes, 512 * 1024 * 1024)
+        self.assertEqual(spec.magic, b"\x1f\x8b")
+        self.assertEqual(spec.content, "gzip")
+        hint = spec.hint
+        for needle in (
+            r"%USERPROFILE%\AppData\LocalLow\Pugstorm\Core Keeper\Steam",
+            "worlds",
+            "AppData is hidden",
+            "slot 0 is the top world",
+            "safety backup",
+            "Characters stay on the player's computer",
+            "fogged",
+            "public or beta",
+        ):
+            self.assertIn(needle, hint)
+        joined = " ".join(rule.error for rule in spec.reject)
+        self.assertIn(".pugbackup", joined)
+        self.assertIn(".world.gzip", joined)
+        self.assertIn("CoreKeeperSaves.zip", joined)
+
+    def test_no_core_keeper_nouns_in_supervisor_package(self) -> None:
+        base = ROOT / "game-server-base" / "game_server"
+        hits: list[str] = []
+        for path in base.rglob("*"):
+            if not path.is_file():
+                continue
+            if "__pycache__" in path.parts or path.suffix in {".pyc", ".png"}:
+                continue
+            try:
+                text = path.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                continue
+            lower = text.lower()
+            for word in ("core keeper", "corekeeper", "pugstorm", "pugbackup"):
+                if word in lower:
+                    hits.append(f"{path.relative_to(ROOT)}:{word}")
+        self.assertEqual(hits, [], f"Core Keeper leaked into the supervisor: {hits}")
+
+    def test_valid_gzip_replaces_selected_slot_and_adopts_owner(self) -> None:
+        blob = _gzip_bytes(b"CAVERN-TILES")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            supervisor = _ck_supervisor(root, world_index=0)
+            worlds = root / "world" / "worlds"
+            worlds.mkdir()
+            live = worlds / "0.world.gzip"
+            live.write_bytes(b"OLD-WORLD")
+            other = worlds / "1.world.gzip"
+            other.write_bytes(b"OTHER-SLOT")
+            expected_uid, expected_gid = live.stat().st_uid, live.stat().st_gid
+            if os.geteuid() == 0:
+                os.chown(live, 65534, 65534)
+                os.chown(worlds, 65534, 65534)
+                expected_uid, expected_gid = 65534, 65534
+            staged = root / "upload-pending-20261007T120000Z-3.WORLD.GZIP"
+            staged.write_bytes(blob)
+            stops: list[str] = []
+            starts: list[str] = []
+            supervisor.process.proc = _Alive()  # type: ignore[assignment]
+            supervisor.process.stop = lambda timeout=None: stops.append("stop")  # type: ignore[method-assign]
+            supervisor.process.start = lambda reason="boot": starts.append(reason)  # type: ignore[method-assign]
+            calls: list[tuple[int, int]] = []
+            real_chown = os.chown
+
+            def spy(path, uid, gid, *args, **kwargs):
+                calls.append((uid, gid))
+                return real_chown(path, uid, gid, *args, **kwargs)
+
+            scheduled = supervisor.request_world_upload(staged)
+            self.assertTrue(scheduled["ok"], scheduled)
+            self.assertEqual(stops, [])
+            self.assertEqual(live.read_bytes(), b"OLD-WORLD")
+            self.assertEqual(supervisor._upload_pending, staged)
+            old_umask = os.umask(0o077)
+            try:
+                with patch("game_server.world_save.os.chown", spy):
+                    supervisor._apply_world_upload(staged)
+            finally:
+                os.umask(old_umask)
+            self.assertEqual(stops, ["stop"])
+            self.assertEqual(starts, ["restore"])
+            self.assertEqual(live.read_bytes(), blob)
+            with gzip.open(live, "rb") as fh:
+                self.assertEqual(fh.read(), b"CAVERN-TILES")
+            self.assertEqual(other.read_bytes(), b"OTHER-SLOT")
+            self.assertEqual(live.stat().st_mode & 0o777, 0o644)
+            self.assertIn((expected_uid, expected_gid), calls)
+            if os.geteuid() == 0:
+                self.assertEqual(live.stat().st_uid, expected_uid)
+                self.assertEqual(live.stat().st_gid, expected_gid)
+            status = supervisor.status()
+            info = status["world_save"]
+            self.assertIn("AppData", str(info.get("hint")))
+            self.assertIn("Pugstorm", str(info.get("hint")))
+            view = _ui_view(status, plugin_name(supervisor), ui_theme=supervisor.plugin.ui_theme)
+            html = render_status_html(view)
+            self.assertIn('id="world-upload-hint"', html)
+            self.assertIn("AppData", html)
+            self.assertIn("LocalLow", html)
+            self.assertIn("fogged", html)
+            self.assertIn("safety backup", html)
+
+    def test_bad_uploads_leave_the_live_world_and_server_untouched(self) -> None:
+        valid = _gzip_bytes(b"CAVERN-TILES")
+        damaged = valid[:12]
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            supervisor = _ck_supervisor(root, world_index=0)
+            worlds = root / "world" / "worlds"
+            worlds.mkdir()
+            live = worlds / "0.world.gzip"
+            live.write_bytes(b"OLD-WORLD")
+            other = worlds / "1.world.gzip"
+            other.write_bytes(b"OTHER-SLOT")
+            stops: list[str] = []
+            supervisor.process.proc = _Alive()  # type: ignore[assignment]
+            supervisor.process.stop = lambda timeout=None: stops.append("stop")  # type: ignore[method-assign]
+            cases = [
+                ("CoreKeeperSaves.zip", _zip_bytes(), "corekeepersaves.zip"),
+                (
+                    "upload-pending-20261007T120000Z-0.world.gzip",
+                    _zip_bytes(),
+                    "zip header",
+                ),
+                (
+                    "upload-pending-20261007T120000Z-0.world.gzip",
+                    b"not-a-world",
+                    "not a gzip",
+                ),
+                ("upload-pending-20261007T120000Z-0.world.gzip", b"", "empty"),
+                (
+                    "upload-pending-20261007T120000Z-0.world.gzip.pugbackup",
+                    valid,
+                    ".pugbackup",
+                ),
+                (
+                    "upload-pending-20261007T120000Z-0.world.gzip",
+                    damaged,
+                    "incomplete",
+                ),
+            ]
+            for name, payload, needle in cases:
+                staged = root / "incoming" / name
+                staged.parent.mkdir(exist_ok=True)
+                staged.write_bytes(payload)
+                result = supervisor.request_world_upload(staged)
+                self.assertFalse(result["ok"], name)
+                self.assertIn(needle, result["error"].lower(), result["error"])
+                self.assertEqual(stops, [], name)
+                self.assertIsNone(supervisor._upload_pending, name)
+                self.assertIsNone(supervisor._activity, name)
+                self.assertIsNone(supervisor.last_restore_error, name)
+                self.assertTrue(supervisor.process.running, name)
+                self.assertFalse(supervisor.process.intentional_stop, name)
+                self.assertEqual(live.read_bytes(), b"OLD-WORLD", name)
+                self.assertEqual(other.read_bytes(), b"OTHER-SLOT", name)
+
+            # Oversize uses the plugin message (512 MB) without writing a huge file.
+            spec = supervisor.plugin.world_upload
+            assert spec is not None
+            supervisor.plugin.world_upload = replace(spec, max_bytes=8)
+            staged = root / "incoming" / "upload-pending-20261007T120000Z-0.world.gzip"
+            staged.write_bytes(valid)
+            result = supervisor.request_world_upload(staged)
+            self.assertFalse(result["ok"])
+            self.assertIn("512 mb", result["error"].lower())
+            self.assertIn("too large", result["error"].lower())
+            self.assertEqual(stops, [])
+            self.assertEqual(live.read_bytes(), b"OLD-WORLD")
+            self.assertTrue(supervisor.process.running)
+
+            supervisor.plugin.world_upload = spec
+            with self.assertRaises(RuntimeError):
+                supervisor._apply_world_upload(
+                    root / "incoming" / "upload-pending-20261007T120000Z-0.world.gzip.pugbackup"
+                )
+            self.assertEqual(stops, [])
+            self.assertEqual(live.read_bytes(), b"OLD-WORLD")
+            self.assertTrue(supervisor.process.running)
+
+
+def plugin_name(supervisor: GameServerSupervisor) -> str:
+    return supervisor.plugin.name
 
 
 if __name__ == "__main__":

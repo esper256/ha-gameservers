@@ -38,6 +38,7 @@ from .world_save import (
     effective_world_kind,
     infer_world_kind,
     install_zip_into_directory,
+    replace_world_file,
     write_world_backup,
 )
 
@@ -947,15 +948,7 @@ class BackupManager:
             or infer_world_kind(self.sources[0]) == KIND_FILE
         ):
             target = self.sources[0]
-            target.parent.mkdir(parents=True, exist_ok=True)
-            if target.exists() and target.is_dir():
-                shutil.rmtree(target)
-            tmp = target.with_name(f".{target.name}.restore-tmp")
-            try:
-                shutil.copyfile(path, tmp)
-                tmp.replace(target)
-            finally:
-                tmp.unlink(missing_ok=True)
+            replace_world_file(path, target)
             return {
                 "ok": True,
                 "mode": "replace_file",

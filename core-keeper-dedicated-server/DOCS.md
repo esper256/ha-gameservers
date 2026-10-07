@@ -43,7 +43,21 @@ The world file is often missing until Unity creates the cavern (first player joi
 
 ## Backups and restore
 
-Use **OPEN WEB UI** → **World backups** to restore a listed backup, start **NEW WORLD**, or upload a save. Restoring stops the server, makes a world backup, then restores onto the **active** slot. Anyone online is disconnected. A backup named for another slot is refused until you switch **World slot** to match. **NEW WORLD** clears the active slot only. Upload a `.world.gzip` for this game (single-file save).
+Use **OPEN WEB UI** → **World backups** to restore a listed backup, start **NEW WORLD**, or upload a save. Restoring stops the server, makes a world backup, then restores onto the **active** slot. Anyone online is disconnected. A backup named for another slot is refused until you switch **World slot** to match. **NEW WORLD** clears the active slot only.
+
+## Import a world from a Windows laptop
+
+Open Web UI → **Or upload a save** replaces the **World slot** selected on Configuration (slot 0 is `0.world.gzip`). A safety backup of that slot is taken first, and anyone online is disconnected. The number in the laptop’s filename does not matter: `3.world.gzip` uploaded while this server is on slot 0 becomes the server’s slot 0.
+
+On the laptop, copy **one** file:
+
+`%USERPROFILE%\AppData\LocalLow\Pugstorm\Core Keeper\Steam\<SteamID>\worlds\N.world.gzip`
+
+AppData is hidden (File Explorer → View → Hidden items). Slot **0** is the top world in the in-game menu. Upload that `N.world.gzip` only.
+
+Do **not** upload `CoreKeeperSaves.zip`, a folder, or a `.pugbackup` file. The dedicated server does not use the companion `worldinfos/`, `maps/`, or character `saves/` files — characters stay on each player’s computer, and the explored map may look fogged until someone walks it again. If you really mean to restore a `.pugbackup`, rename it so the name ends in `.world.gzip` and upload that.
+
+The server and the game client must be the same game version and Steam branch (`public` or `beta`). A mismatch shows up as a protocol error, not a failed upload.
 
 ## Logs
 

@@ -13,7 +13,7 @@ from .copyparty import CopypartySpec
 from .launch_prepare import ConfigFileSpec, WorldPrepareSpec
 from .package_install import PackageInstallSpec
 from .world_catalog import WorldCatalogSpec, WorldCreateSpec
-from .world_save import WorldSaveSpec
+from .world_save import WorldSaveSpec, WorldUploadSpec
 
 _OPTION_TEMPLATE_RE = re.compile(r"\{([a-zA-Z_][a-zA-Z0-9_]*)\}")
 
@@ -137,6 +137,9 @@ class GamePlugin:
     restart_when_empty: bool = False
     copyparty: CopypartySpec | None = None
     status_probe: StatusProbeSpec | None = None
+    # Optional checks for HTTP world upload (suffix, magic, size, gzip).
+    # None keeps the historical "copy the bytes" behavior.
+    world_upload: WorldUploadSpec | None = None
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "GamePlugin":
@@ -225,6 +228,7 @@ class GamePlugin:
             restart_when_empty=bool(data.get("restart_when_empty", False)),
             copyparty=CopypartySpec.from_dict(data.get("copyparty")),
             status_probe=StatusProbeSpec.from_dict(data.get("status_probe")),
+            world_upload=WorldUploadSpec.from_dict(data.get("world_upload")),
         )
 
     @property

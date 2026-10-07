@@ -1202,6 +1202,9 @@ class StatusServer:
         restore_callback: Callable[[str], dict[str, Any]] | None = None,
         upload_callback: Callable[[Path], dict[str, Any]] | None = None,
         upload_staging_dir: str | Path | None = None,
+        upload_max_bytes: int | None = None,
+        upload_empty_error: str = "",
+        upload_oversize_error: str = "",
         world_download_callback: Callable[[], dict[str, Any] | None] | None = None,
         restart_callback: Callable[..., dict[str, Any]] | None = None,
         world_switch_callback: Callable[[str], dict[str, Any]] | None = None,
@@ -1219,6 +1222,9 @@ class StatusServer:
         self.restore_callback = restore_callback
         self.upload_callback = upload_callback
         self.upload_staging_dir = Path(upload_staging_dir) if upload_staging_dir else None
+        self.upload_max_bytes = upload_max_bytes
+        self.upload_empty_error = upload_empty_error
+        self.upload_oversize_error = upload_oversize_error
         self.world_download_callback = world_download_callback
         self.restart_callback = restart_callback
         self.world_switch_callback = world_switch_callback
@@ -1237,6 +1243,9 @@ class StatusServer:
         restore_cb = self.restore_callback
         upload_cb = self.upload_callback
         upload_dir = self.upload_staging_dir
+        upload_max_bytes = self.upload_max_bytes
+        upload_empty_error = self.upload_empty_error
+        upload_oversize_error = self.upload_oversize_error
         world_dl_cb = self.world_download_callback
         restart_cb = self.restart_callback
         world_switch_cb = self.world_switch_callback
@@ -1411,17 +1420,27 @@ class StatusServer:
                         length = -1
                     if length <= 0:
                         self._json(
-                            400, {"ok": False, "error": "empty world upload"}
+                            400,
+                            {
+                                "ok": False,
+                                "error": upload_empty_error or "empty world upload",
+                            },
                         )
                         return
-                    # Hard cap: 8 GiB. Disk free is still checked by backup manager.
+                    # Hard cap: 8 GiB. A plugin may set a lower cap. Disk free
+                    # is still checked by the backup manager.
                     max_upload = 8 * 1024 * 1024 * 1024
+                    if upload_max_bytes and upload_max_bytes > 0:
+                        max_upload = min(max_upload, int(upload_max_bytes))
                     if length > max_upload:
                         self._json(
                             413,
                             {
                                 "ok": False,
-                                "error": f"upload too large (max {max_upload} bytes)",
+                                "error": (
+                                    upload_oversize_error
+                                    or f"upload too large (max {max_upload} bytes)"
+                                ),
                             },
                         )
                         return

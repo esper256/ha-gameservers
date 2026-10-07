@@ -69,14 +69,14 @@ Copy the closest sibling (`necesse-dedicated-server/` for SteamCMD + simple flag
 
    **Version scheme:** `{supervisor_major}.{supervisor_minor}.{game_patch}`.
    The shared supervisor advertises major.minor in `game_server/version.py`
-   (`SUPERVISOR_VERSION`, currently `3.15`). Each game `config.yaml` is that
-   plus a patch (`3.15.0` for the first release on supervisor 3.15).
+   (`SUPERVISOR_VERSION`, currently `3.16`). Each game `config.yaml` is that
+   plus a patch (`3.16.0` for the first release on supervisor 3.16).
 
-   - Supervisor change → bump `SUPERVISOR_VERSION` (e.g. `3.14` → `3.15`) **and**
-     set **every** game add-on to `{new}.0` (`3.15.0`) so users see them all
+   - Supervisor change → bump `SUPERVISOR_VERSION` (e.g. `3.15` → `3.16`) **and**
+     set **every** game add-on to `{new}.0` (`3.16.0`) so users see them all
      update together.
    - Game-only fix (no supervisor change) → bump that game’s patch only
-     (`3.15.0` → `3.15.1`). Leave other games and `SUPERVISOR_VERSION` alone.
+     (`3.16.0` → `3.16.1`). Leave other games and `SUPERVISOR_VERSION` alone.
 
 **Copy `run.sh`’s `export SERVER_PORT=…` when HA publishes a container port the game must bind** (Necesse, Factorio, Stationeers, Core Keeper Direct Connect). The Network UI remaps the *host* port; the process still has to listen on the container port in `config.yaml`. Do **not** set `host_network: true`. Titles that join only through a relay with no listen port can omit it — Core Keeper is not that case: Direct Connect (`-port`) is the default, and Steam Game ID join still works alongside it.
 
@@ -185,6 +185,7 @@ Point the container at your plugin with `GAME_PLUGIN` (Necesse’s `run.sh` does
 | `stop_stdin_commands` | Optional graceful stop |
 | `pre_backup_stdin_commands` | Optional stdin lines sent before a scheduled live backup (save flush). Does not stop the process. |
 | `world_save` | Active world artifact: `strategy: named_path` + `paths` templates. Drives status UI, upload restore, and **by-kind backups** (file = copy as-is; folder = zip). Backup archives are named with that file/folder, retention is grouped per name, and restore refuses a snapshot from a different world until the active name/slot matches. |
+| `world_upload` | Optional checks for **HTTP world upload only** (not backup restore). Runs before the server stops and before the live save is touched. `allowed_suffixes`, `max_bytes`, `magic` (hex prefix), `content: gzip` (header plus a streaming inflate, output discarded), and `reject` entries (`suffix` or `magic`, plus `error`). `errors` supplies the messages for `empty`, `oversize`, `suffix`, `magic`, `content`, and `damaged`. `hint` / `accept` override the Open Web UI upload line. Omit the block to keep “copy the bytes.” File replace also adopts the existing save’s uid/gid (or the parent directory’s) and mode `0644`. |
 | `world_catalog` | Optional Ingress world list (`glob` / `globs`, `name_from`, optional `caption_file` + `caption_json_path`). |
 | `world_create` | Optional extra Ingress create-world fields (`text` or `select`). Labels and values come from the plugin YAML. |
 | `backup_paths` | Fallback roots when no named world exists yet; also used to restore legacy `*.tar.gz` snapshots |

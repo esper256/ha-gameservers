@@ -11,12 +11,14 @@ Games must declare paths — there is no cross-game path guessing.
 
 from __future__ import annotations
 
+import gzip
 import logging
 import os
 import re
 import shutil
 import tempfile
 import zipfile
+import zlib
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Mapping
@@ -40,6 +42,24 @@ SCOPE_MISSING = "missing"
 KIND_FILE = "file"
 KIND_DIRECTORY = "directory"
 KIND_UNKNOWN = "unknown"
+
+# Replaced world files are owner-writable. New parent directories are traversable
+# by the owner. Matches a typical non-root game user rewriting its own save.
+_WORLD_FILE_MODE = 0o644
+_WORLD_DIR_MODE = 0o755
+# Discard inflated bytes past this so a tiny gzip cannot expand without bound.
+_GZIP_UNCOMPRESSED_CAP = 8 * 1024 * 1024 * 1024
+_GZIP_READ_CHUNK = 1024 * 1024
+
+_UPLOAD_ERROR_KEYS = ("empty", "oversize", "suffix", "magic", "content", "damaged")
+_DEFAULT_UPLOAD_ERRORS = {
+    "empty": "uploaded world file is missing or empty",
+    "oversize": "uploaded world file is too large",
+    "suffix": "this file type is not accepted for world upload",
+    "magic": "this file is not an accepted world save",
+    "content": "this file is not a valid world save",
+    "damaged": "this world file looks incomplete or damaged",
+}
 
 
 @dataclass(frozen=True)
@@ -82,6 +102,133 @@ class WorldSaveSpec:
             ).strip()
             or "world_name",
         )
+
+
+@dataclass(frozen=True)
+class WorldUploadReject:
+    """One plugin-supplied reason to refuse an upload before it is applied."""
+
+    suffix: str = ""
+    magic: bytes = b""
+    error: str = ""
+
+
+@dataclass(frozen=True)
+class WorldUploadSpec:
+    """Declarative checks for an HTTP world upload. Game nouns stay in the plugin.
+
+    ``content: gzip`` checks the gzip header and inflates the member in chunks
+    (output discarded). ``reject`` entries supply the message for a suffix or
+    a magic prefix. Nothing here names a game.
+    """
+
+    allowed_suffixes: tuple[str, ...] = ()
+    reject: tuple[WorldUploadReject, ...] = ()
+    magic: bytes = b""
+    content: str = ""
+    max_bytes: int = 0
+    hint: str = ""
+    accept: str = ""
+    errors: dict[str, str] = field(default_factory=dict)
+
+    def message(self, key: str) -> str:
+        text = (self.errors.get(key) or "").strip()
+        if text:
+            return text
+        return _DEFAULT_UPLOAD_ERRORS[key]
+
+    @classmethod
+    def from_dict(cls, data: Any) -> "WorldUploadSpec | None":
+        if data is None:
+            return None
+        if not isinstance(data, dict):
+            raise ValueError("world_upload must be a mapping when provided")
+        content = str(data.get("content") or "").strip().lower()
+        if content not in {"", "gzip"}:
+            raise ValueError(
+                f"Unsupported world_upload.content {content!r}; expected gzip or omit"
+            )
+        try:
+            max_bytes = int(data.get("max_bytes") or 0)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("world_upload.max_bytes must be an integer") from exc
+        if max_bytes < 0:
+            raise ValueError("world_upload.max_bytes must be >= 0")
+        suffixes = tuple(
+            _normalize_upload_suffix(item)
+            for item in (data.get("allowed_suffixes") or [])
+        )
+        rules: list[WorldUploadReject] = []
+        for item in data.get("reject") or []:
+            if not isinstance(item, dict):
+                raise ValueError("world_upload.reject entries must be mappings")
+            error = str(item.get("error") or "").strip()
+            if not error:
+                raise ValueError("world_upload.reject entries need an error message")
+            suffix = str(item.get("suffix") or "").strip()
+            magic_raw = item.get("magic")
+            has_magic = magic_raw is not None and str(magic_raw).strip() != ""
+            if bool(suffix) == bool(has_magic):
+                raise ValueError(
+                    "world_upload.reject entry needs exactly one of suffix or magic"
+                )
+            rules.append(
+                WorldUploadReject(
+                    suffix=_normalize_upload_suffix(suffix) if suffix else "",
+                    magic=_parse_hex_magic(magic_raw) if has_magic else b"",
+                    error=error,
+                )
+            )
+        raw_errors = data.get("errors") or {}
+        if not isinstance(raw_errors, dict):
+            raise ValueError("world_upload.errors must be a mapping")
+        errors: dict[str, str] = {}
+        for key, value in raw_errors.items():
+            name = str(key).strip()
+            if name not in _UPLOAD_ERROR_KEYS:
+                raise ValueError(
+                    f"Unsupported world_upload.errors key {name!r}; "
+                    f"expected one of {', '.join(_UPLOAD_ERROR_KEYS)}"
+                )
+            text = str(value or "").strip()
+            if text:
+                errors[name] = text
+        magic_raw = data.get("magic")
+        magic = (
+            _parse_hex_magic(magic_raw)
+            if magic_raw is not None and str(magic_raw).strip() != ""
+            else b""
+        )
+        return cls(
+            allowed_suffixes=suffixes,
+            reject=tuple(rules),
+            magic=magic,
+            content=content,
+            max_bytes=max_bytes,
+            hint=str(data.get("hint") or "").strip(),
+            accept=str(data.get("accept") or "").strip(),
+            errors=errors,
+        )
+
+
+def _normalize_upload_suffix(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    if not text.startswith(".") or text in {".", ".."} or any(
+        ch in text for ch in "/\\ \t"
+    ):
+        raise ValueError(
+            f"world_upload suffix {value!r} must be a file extension starting with '.'"
+        )
+    return text
+
+
+def _parse_hex_magic(value: Any) -> bytes:
+    raw = re.sub(r"[^0-9a-fA-F]", "", str(value or ""))
+    if len(raw) < 2 or len(raw) % 2 != 0 or len(raw) > 64:
+        raise ValueError(
+            f"world_upload magic {value!r} must be an even number of hex digits"
+        )
+    return bytes.fromhex(raw)
 
 
 @dataclass(frozen=True)
@@ -147,8 +294,16 @@ def infer_world_kind(path: str | Path | None) -> str:
     return KIND_DIRECTORY
 
 
-def world_upload_accepts(active: ActiveWorld) -> dict[str, object]:
-    """UI hints for whether / how an HTTP world upload can be applied."""
+def world_upload_accepts(
+    active: ActiveWorld,
+    upload_spec: WorldUploadSpec | None = None,
+) -> dict[str, object]:
+    """UI hints for whether / how an HTTP world upload can be applied.
+
+    ``upload_spec.hint`` / ``accept`` override the generic file-kind text when
+    the plugin declares them. The override is display-only; checks live in
+    ``validate_world_upload``.
+    """
 
     kind = active.kind if active.kind in {KIND_FILE, KIND_DIRECTORY} else infer_world_kind(
         active.path
@@ -177,6 +332,11 @@ def world_upload_accepts(active: ActiveWorld) -> dict[str, object]:
         mode = "unavailable"
         hint = "World upload needs a named file or folder save path from the game plugin."
         uploadable = False
+    if uploadable and upload_spec is not None:
+        if upload_spec.hint:
+            hint = upload_spec.hint
+        if upload_spec.accept:
+            accept = upload_spec.accept
     return {
         "uploadable": uploadable,
         "kind": kind,
@@ -184,6 +344,128 @@ def world_upload_accepts(active: ActiveWorld) -> dict[str, object]:
         "accept": accept,
         "hint": hint,
     }
+
+
+def validate_world_upload(
+    spec: WorldUploadSpec,
+    upload_path: str | Path,
+    *,
+    filename: str | None = None,
+) -> str | None:
+    """Return a plugin error message, or None when the upload may be applied.
+
+    Reads the file in small chunks. Does not modify ``upload_path`` or any
+    live world, and does not stop a game process. Call this before either.
+    """
+
+    path = Path(upload_path)
+    name = Path(filename).name if filename else path.name
+    lower_name = name.lower()
+    try:
+        size = path.stat().st_size if path.is_file() else 0
+    except OSError:
+        size = 0
+    if size < 1:
+        return spec.message("empty")
+    if spec.max_bytes and size > spec.max_bytes:
+        return spec.message("oversize")
+    for rule in spec.reject:
+        if rule.suffix and lower_name.endswith(rule.suffix):
+            return rule.error
+    if spec.allowed_suffixes and not any(
+        lower_name.endswith(suffix) for suffix in spec.allowed_suffixes
+    ):
+        return spec.message("suffix")
+
+    need = 16
+    if spec.magic:
+        need = max(need, len(spec.magic))
+    for rule in spec.reject:
+        if rule.magic:
+            need = max(need, len(rule.magic))
+    try:
+        with path.open("rb") as fh:
+            prefix = fh.read(need)
+    except OSError:
+        return spec.message("empty")
+    for rule in spec.reject:
+        if rule.magic and prefix.startswith(rule.magic):
+            return rule.error
+    if spec.magic and not prefix.startswith(spec.magic):
+        return spec.message("magic")
+    if spec.content == "gzip":
+        verdict = _gzip_member_verdict(path)
+        if verdict == "ok":
+            return None
+        if verdict == "stream":
+            return spec.message("damaged")
+        return spec.message("content")
+    return None
+
+
+def _gzip_member_verdict(path: Path) -> str:
+    """Return ``ok``, ``header``, or ``stream`` without holding the inflate.
+
+    ``header`` means the gzip header itself is incomplete or illegal.
+    ``stream`` means the header parsed but the deflate member did not
+    (truncated, bad CRC, or inflated past the cap).
+    """
+
+    if not _gzip_header_valid(path):
+        return "header"
+    total = 0
+    try:
+        with gzip.open(path, "rb") as fh:
+            while True:
+                chunk = fh.read(_GZIP_READ_CHUNK)
+                if not chunk:
+                    return "ok"
+                total += len(chunk)
+                if total > _GZIP_UNCOMPRESSED_CAP:
+                    return "stream"
+    except (EOFError, zlib.error, OSError):
+        return "stream"
+
+
+def _gzip_header_valid(path: Path) -> bool:
+    """True when the first member has a legal gzip header (not the whole file)."""
+
+    try:
+        with path.open("rb") as fh:
+            hdr = fh.read(10)
+            if len(hdr) < 10 or hdr[0:2] != b"\x1f\x8b" or hdr[2] != 8:
+                return False
+            flags = hdr[3]
+            if flags & 0xE0:
+                return False
+            if flags & 0x04:
+                raw_len = fh.read(2)
+                if len(raw_len) < 2:
+                    return False
+                extra_len = int.from_bytes(raw_len, "little")
+                if len(fh.read(extra_len)) != extra_len:
+                    return False
+            if flags & 0x08 and not _skip_gzip_cstr(fh):
+                return False
+            if flags & 0x10 and not _skip_gzip_cstr(fh):
+                return False
+            if flags & 0x02 and len(fh.read(2)) != 2:
+                return False
+            return True
+    except OSError:
+        return False
+
+
+def _skip_gzip_cstr(fh: Any, limit: int = 4096) -> bool:
+    seen = 0
+    while seen < limit:
+        chunk = fh.read(1)
+        if not chunk:
+            return False
+        seen += 1
+        if chunk == b"\0":
+            return True
+    return False
 
 
 def backup_sources_for(plugin: Any, data_dir: str | None = None) -> list[str]:
@@ -607,7 +889,8 @@ def apply_world_upload(
     the upload alone:
 
     - ``file`` — write upload bytes to the target path (game's single-file save,
-      which may itself be a ``.zip``)
+      which may itself be a ``.zip``). The new file keeps the previous owner's
+      uid/gid (or the parent directory's, if the file is new) and mode 0644.
     - ``directory`` — extract a zip into a staging folder, then swap into the
       live directory (preserves that directory's inode / ownership)
 
@@ -636,15 +919,7 @@ def apply_world_upload(
 
     if kind == KIND_FILE:
         _remove_sibling_expected_paths(active, keep=target, data_dir=data_dir)
-        target.parent.mkdir(parents=True, exist_ok=True)
-        if target.exists() and target.is_dir():
-            shutil.rmtree(target)
-        tmp = target.with_name(f".{target.name}.upload-tmp")
-        try:
-            shutil.copyfile(upload, tmp)
-            tmp.replace(target)
-        finally:
-            tmp.unlink(missing_ok=True)
+        replace_world_file(upload, target)
         return {
             "ok": True,
             "mode": "replace_file",
@@ -735,19 +1010,85 @@ def install_zip_into_directory(
             shutil.rmtree(staging, ignore_errors=True)
 
 
+def replace_world_file(upload: Path, target: Path) -> None:
+    """Copy ``upload`` onto ``target`` and give it the game user's ownership.
+
+    The new inode takes the uid/gid of the existing file, or of the nearest
+    existing parent when the file is new (the supervisor is often root; the
+    game process is not). Parent directories created along the way get that
+    same owner. Mode is ``0o644`` so the owner can rewrite the save. chown
+    and chmod are best-effort, same as a directory extract.
+    """
+
+    upload = Path(upload)
+    target = Path(target)
+    missing_dirs: list[Path] = []
+    cursor = target.parent
+    while not cursor.exists():
+        missing_dirs.append(cursor)
+        parent = cursor.parent
+        if parent == cursor:
+            break
+        cursor = parent
+    ancestor = cursor if cursor.exists() else None
+    ancestor_owner = _owner_ids(ancestor) if ancestor is not None else None
+    if target.is_dir() and not target.is_symlink():
+        file_owner = _owner_ids(target) or ancestor_owner
+        shutil.rmtree(target)
+    elif target.exists():
+        file_owner = _owner_ids(target) or ancestor_owner
+    else:
+        file_owner = ancestor_owner
+
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if ancestor_owner is not None:
+        for directory in reversed(missing_dirs):
+            if directory.is_dir():
+                _chown_one(directory, ancestor_owner[0], ancestor_owner[1])
+                _chmod_one(directory, _WORLD_DIR_MODE)
+
+    tmp = target.with_name(f".{target.name}.upload-tmp")
+    try:
+        shutil.copyfile(upload, tmp)
+        if file_owner is not None:
+            _chown_one(tmp, file_owner[0], file_owner[1])
+        _chmod_one(tmp, _WORLD_FILE_MODE)
+        tmp.replace(target)
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+def _owner_ids(path: Path) -> tuple[int, int] | None:
+    try:
+        st = path.stat()
+    except OSError:
+        return None
+    return st.st_uid, st.st_gid
+
+
+def _chown_one(path: Path, uid: int, gid: int) -> None:
+    try:
+        os.chown(path, uid, gid, follow_symlinks=False)
+    except OSError:
+        return
+
+
+def _chmod_one(path: Path, mode: int) -> None:
+    try:
+        os.chmod(path, mode)
+    except OSError:
+        return
+
+
 def _chown_tree_like(path: Path, owner_src: Path) -> None:
     """Best-effort: copied files take the live world's uid/gid (root→gameserver)."""
 
-    try:
-        st = owner_src.stat()
-    except OSError:
+    owner = _owner_ids(owner_src)
+    if owner is None:
         return
-    uid, gid = st.st_uid, st.st_gid
+    uid, gid = owner
     for current in [path, *path.rglob("*")]:
-        try:
-            os.chown(current, uid, gid, follow_symlinks=False)
-        except OSError:
-            continue
+        _chown_one(current, uid, gid)
 
 
 def _swap_directory_contents(target: Path, staging: Path) -> None:

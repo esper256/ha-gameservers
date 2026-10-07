@@ -1,5 +1,9 @@
 # Changelog
 
+## 3.16.0
+
+- Open Web UI accepts only a single `.world.gzip` from the laptop worlds folder. Zip bundles, `.pugbackup` files, and other files are refused before the server stops. A valid upload replaces the selected World slot after a safety backup, and the new file is owned by the game user.
+
 ## 3.15.0
 
 - No player-facing changes for this game.

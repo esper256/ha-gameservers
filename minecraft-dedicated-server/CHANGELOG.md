@@ -1,5 +1,9 @@
 # Changelog
 
+## 3.16.0
+
+- No player-facing changes for this game.
+
 ## 3.15.0
 
 - Docker and compose honor `SERVER_MOTD`, `EULA`, and `ONLINE_MODE` as separate settings. A YAML indent had merged those three names into one, so custom values were ignored.
