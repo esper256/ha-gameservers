@@ -44,6 +44,25 @@ class CopypartySpecTests(unittest.TestCase):
         self.assertEqual(spec.port, 9001)
         self.assertEqual(spec.root, "{data_dir}/{world_name}/mods")
         self.assertEqual(spec.after_idle_upload, ["python3", "/opt/publish.py"])
+        self.assertEqual(spec.count_exclude, [])
+
+    def test_count_exclude_is_filenames_or_globs(self) -> None:
+        spec = CopypartySpec.from_dict(
+            {
+                "root": "{data_dir}/mods",
+                "count_exclude": ["NOTES.txt", "*.log", "NOTES.txt", "  "],
+            }
+        )
+        assert spec is not None
+        self.assertEqual(spec.count_exclude, ["NOTES.txt", "*.log"])
+        with self.assertRaises(ValueError):
+            CopypartySpec.from_dict(
+                {"root": "{data_dir}/mods", "count_exclude": "NOTES.txt"}
+            )
+        with self.assertRaises(ValueError):
+            CopypartySpec.from_dict(
+                {"root": "{data_dir}/mods", "count_exclude": ["subdir/NOTES.txt"]}
+            )
 
 
 class CopypartyLanPortTests(unittest.TestCase):
@@ -214,6 +233,43 @@ class CopypartyPublisherTests(unittest.TestCase):
                     world_name="FamilyWorld",
                 ).ui_status()
             )
+
+    def test_count_exclude_skips_exact_names_and_globs(self) -> None:
+        from game_server.copyparty import count_visible_files
+
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp)
+            (folder / "cool_creepers.jar").write_bytes(b"jar")
+            (folder / "NOTES.txt").write_text("keep me out\n", encoding="utf-8")
+            (folder / "server.log").write_text("log\n", encoding="utf-8")
+            (folder / "notes.txt").write_text("different case\n", encoding="utf-8")
+            (folder / ".prologue.html").write_text("banner\n", encoding="utf-8")
+            (folder / "skip.jar.PARTIAL").write_bytes(b"x")
+            exclude = ["NOTES.txt", "*.log"]
+            self.assertEqual(count_visible_files(folder), 4)
+            self.assertEqual(count_visible_files(folder, exclude), 2)
+            self.assertEqual(count_visible_files(folder, []), 4)
+            spec = CopypartySpec.from_dict(
+                {
+                    "port": 8765,
+                    "root": "{data_dir}/{world_name}/uploaded_mods",
+                    "count_exclude": exclude,
+                }
+            )
+            data = folder / "worlds"
+            drop = data / "FamilyWorld" / "uploaded_mods"
+            drop.mkdir(parents=True)
+            (drop / "cool_creepers.jar").write_bytes(b"jar")
+            (drop / "NOTES.txt").write_text("keep me out\n", encoding="utf-8")
+            (drop / "server.log").write_text("log\n", encoding="utf-8")
+            publisher = CopypartyPublisher(
+                spec,
+                state_dir=str(folder / "state"),
+                data_dir=str(data),
+                options={"world_name": "FamilyWorld"},
+                world_name="FamilyWorld",
+            )
+            self.assertEqual(publisher.ui_status(), {"port": 8765, "file_count": 1})
 
     def test_example_plugin_has_no_copyparty(self) -> None:
         plugin = load_plugin(FIXTURE)

@@ -55,8 +55,8 @@ env_options:
   - MINECRAFT_VERSION
   - PUBLISHER_PASSWORD
   - SERVER_MOTD
-      - EULA
-      - ONLINE_MODE
+  - EULA
+  - ONLINE_MODE
 ui_theme:
   bg: "#1a140c"
   panel: "#2a2116"
@@ -74,6 +74,8 @@ copyparty:
   port: 8765
   root: "{data_dir}/{world_name}/uploaded_mods"
   password_option: publisher_password
+  count_exclude:
+    - AUTOMODPACK-FINGERPRINT.txt
   before_upload:
     - python3
     - /opt/publish_mod.py
