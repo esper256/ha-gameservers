@@ -7,6 +7,7 @@ layer (validate, rename, protect).
 
 from __future__ import annotations
 
+import fnmatch
 import logging
 import os
 import shutil
@@ -31,6 +32,32 @@ def _coerce_argv(raw: Any) -> list[str]:
     return [str(x) for x in raw if str(x).strip()]
 
 
+def _coerce_count_exclude(raw: Any) -> list[str]:
+    """Filenames (or simple globs) left out of the Uploads file count."""
+
+    if not raw:
+        return []
+    if not isinstance(raw, (list, tuple)):
+        raise ValueError("copyparty.count_exclude must be a list of filenames")
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in raw:
+        if not isinstance(item, str):
+            raise ValueError(
+                f"copyparty.count_exclude entries must be filenames, not {item!r}"
+            )
+        name = item.strip()
+        if not name or name in seen:
+            continue
+        if "/" in name or "\\" in name or name in {".", ".."}:
+            raise ValueError(
+                f"copyparty.count_exclude entry must be a filename, not {name!r}"
+            )
+        seen.add(name)
+        out.append(name)
+    return out
+
+
 @dataclass
 class CopypartySpec:
     root: str
@@ -40,6 +67,8 @@ class CopypartySpec:
     after_idle_upload: list[str] = field(default_factory=list)
     before_delete: list[str] = field(default_factory=list)
     after_delete: list[str] = field(default_factory=list)
+    # Exact filenames or simple globs (*, ?, [...]) omitted from the Uploads count.
+    count_exclude: list[str] = field(default_factory=list)
 
     @classmethod
     def from_dict(cls, data: Any) -> CopypartySpec | None:
@@ -66,6 +95,7 @@ class CopypartySpec:
             after_idle_upload=_coerce_argv(data.get("after_idle_upload")),
             before_delete=_coerce_argv(data.get("before_delete")),
             after_delete=_coerce_argv(data.get("after_delete")),
+            count_exclude=_coerce_count_exclude(data.get("count_exclude")),
         )
 
 
@@ -189,7 +219,11 @@ class CopypartyPublisher:
         root = self.expanded_root()
         return {
             "port": int(host_port),
-            "file_count": count_visible_files(root) if root is not None else 0,
+            "file_count": (
+                count_visible_files(root, self._spec.count_exclude)
+                if root is not None
+                else 0
+            ),
         }
 
     def _addon_network(self) -> Mapping[str, Any] | None:
@@ -334,11 +368,23 @@ def _shell_quote(part: str) -> str:
     return "'" + part.replace("'", "'\\''") + "'"
 
 
-def count_visible_files(folder: Path | None) -> int:
-    """Regular files in the drop root, skipping dots and Copyparty PARTIAL names."""
+def _excluded_upload_name(name: str, patterns: tuple[str, ...]) -> bool:
+    return any(fnmatch.fnmatchcase(name, pattern) for pattern in patterns)
+
+
+def count_visible_files(
+    folder: Path | None,
+    exclude: list[str] | tuple[str, ...] | None = None,
+) -> int:
+    """Regular files in the drop root.
+
+    Skips dotfiles, Copyparty ``*.partial`` names, and basenames that match
+    ``exclude`` (exact filename or a simple ``fnmatch`` glob).
+    """
 
     if folder is None or not folder.is_dir():
         return 0
+    patterns = tuple(pattern for pattern in (exclude or ()) if pattern)
     total = 0
     try:
         children = list(folder.iterdir())
@@ -355,6 +401,8 @@ def count_visible_files(folder: Path | None) -> int:
             continue
         lower = name.lower()
         if lower.endswith(".partial"):
+            continue
+        if _excluded_upload_name(name, patterns):
             continue
         total += 1
     return total

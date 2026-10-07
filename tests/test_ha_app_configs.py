@@ -227,6 +227,28 @@ class HaAppConfigTests(unittest.TestCase):
                 )
         self.assertEqual(errors, [], "\n".join(errors))
 
+    def test_game_yaml_env_options_are_identifiers(self) -> None:
+        """A bad indent must not merge several env keys into one string."""
+
+        plugins = sorted(ROOT.glob("*-dedicated-server/games/game.yaml"))
+        self.assertTrue(plugins, "expected game plugins")
+        ident = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+        errors: list[str] = []
+        for path in plugins:
+            data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+            raw = data.get("env_options")
+            if raw is None:
+                continue
+            if not isinstance(raw, list):
+                errors.append(f"{path}: env_options must be a list")
+                continue
+            for item in raw:
+                if not isinstance(item, str) or ident.fullmatch(item) is None:
+                    errors.append(
+                        f"{path}: env_options entry {item!r} is not a plain identifier"
+                    )
+        self.assertEqual(errors, [], "\n".join(errors))
+
     def test_ingress_theme_accents_are_distinct(self) -> None:
         """Each game's Ingress accent should differ so store UIs don't look cloned."""
         plugins = sorted(ROOT.glob("*-dedicated-server/games/game.yaml"))

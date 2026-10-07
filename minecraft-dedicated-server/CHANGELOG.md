@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.15.0
+
+- Docker and compose honor `SERVER_MOTD`, `EULA`, and `ONLINE_MODE` as separate settings. A YAML indent had merged those three names into one, so custom values were ignored.
+- The Uploads card counts mod files only. `AUTOMODPACK-FINGERPRINT.txt` stays on the upload page and is left out of that count.
+
 ## 3.14.9
 
 - After the server has started once, the mod-upload page has a read-only `AUTOMODPACK-FINGERPRINT.txt`. Paste that value when the Minecraft client warns about mods. It is the public hash of the AutoModpack cert, not a password.

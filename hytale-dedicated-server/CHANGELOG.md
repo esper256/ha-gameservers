@@ -1,5 +1,9 @@
 # Changelog
 
+## 3.15.0
+
+- No player-facing changes for this game.
+
 ## 3.14.0
 
 - No player-facing changes for this game.

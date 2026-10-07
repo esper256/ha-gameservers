@@ -87,6 +87,17 @@ class MinecraftPluginTests(unittest.TestCase):
         self.assertNotIn("white_list", cfg.get("options") or {})
         self.assertNotIn("white_list", cfg.get("schema") or {})
         self.assertNotIn("WHITE_LIST", plugin.env_options)
+        self.assertEqual(
+            plugin.env_options,
+            [
+                "JAVA_OPTS",
+                "MINECRAFT_VERSION",
+                "PUBLISHER_PASSWORD",
+                "SERVER_MOTD",
+                "EULA",
+                "ONLINE_MODE",
+            ],
+        )
         self.assertTrue(plugin.restart_when_empty)
         assert plugin.copyparty is not None
         self.assertEqual(plugin.copyparty.port, 8765)
@@ -94,6 +105,10 @@ class MinecraftPluginTests(unittest.TestCase):
             plugin.copyparty.root, "{data_dir}/{world_name}/uploaded_mods"
         )
         self.assertIn("--guard-upload", plugin.copyparty.before_upload)
+        self.assertEqual(
+            plugin.copyparty.count_exclude,
+            [haos_defaults.AUTOMODPACK_FINGERPRINT_NAME],
+        )
         assert plugin.status_probe is not None
         self.assertIn("status-probe", plugin.status_probe.argv)
         self.assertEqual(plugin.player_tracking_mode, "count")
@@ -1412,26 +1427,34 @@ class AutoModpackFingerprintTests(unittest.TestCase):
             self.assertFalse(dest.exists())
 
     def test_minecraft_copyparty_skips_fingerprint_in_file_count(self) -> None:
+        """Uploads count uses the base helper and Minecraft's plugin exclude list."""
+
+        from game_server.copyparty import CopypartyPublisher, count_visible_files
+
+        plugin = load_plugin(PLUGIN)
+        assert plugin.copyparty is not None
+        fingerprint = haos_defaults.AUTOMODPACK_FINGERPRINT_NAME
+        self.assertEqual(plugin.copyparty.count_exclude, [fingerprint])
         with tempfile.TemporaryDirectory() as tmp:
             folder = Path(tmp)
-            (folder / "cool_creepers.jar").write_bytes(b"mod")
-            (folder / "AUTOMODPACK-FINGERPRINT.txt").write_text("fp\n", encoding="utf-8")
-            (folder / ".prologue.html").write_text("banner\n", encoding="utf-8")
-            env = {**os.environ, "PYTHONPATH": str(MC)}
-            completed = subprocess.run(
-                [
-                    sys.executable,
-                    "-c",
-                    "from pathlib import Path; "
-                    "from game_server.copyparty import count_visible_files; "
-                    f"print(count_visible_files(Path({str(folder)!r})))",
-                ],
-                check=True,
-                capture_output=True,
-                text=True,
-                env=env,
+            data = folder / "worlds"
+            drop = data / "World" / "uploaded_mods"
+            drop.mkdir(parents=True)
+            (drop / "cool_creepers.jar").write_bytes(b"mod")
+            (drop / fingerprint).write_text("fp\n", encoding="utf-8")
+            (drop / ".prologue.html").write_text("banner\n", encoding="utf-8")
+            self.assertEqual(count_visible_files(drop), 2)
+            self.assertEqual(count_visible_files(drop, plugin.copyparty.count_exclude), 1)
+            publisher = CopypartyPublisher(
+                plugin.copyparty,
+                state_dir=str(folder / "state"),
+                data_dir=str(data),
+                options={"world_name": "World"},
+                world_name="World",
             )
-            self.assertEqual(completed.stdout.strip(), "1")
+            status = publisher.ui_status()
+            assert status is not None
+            self.assertEqual(status["file_count"], 1)
 
     def _env(self, tmp: Path, version: str = "1.21.1") -> Path:
         worlds = tmp / "worlds"
