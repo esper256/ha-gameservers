@@ -30,6 +30,62 @@ world_catalog:
   glob: "{data_dir}/worlds/*.world.gzip"
   name_from: strip_suffix
   suffix: ".world.gzip"
+# HTTP upload: one raw world file. Checked before the server stops.
+# 512 MiB is above a large cavern (usually megabytes, sometimes the low
+# hundreds of MB) and still refuses a full save-folder zip.
+# .pugbackup is rejected, not renamed: it sits next to the live world and is
+# often older. Renaming it to end in .world.gzip is the explicit opt-in.
+world_upload:
+  max_bytes: 536870912
+  allowed_suffixes:
+    - ".world.gzip"
+  magic: "1f8b"
+  content: gzip
+  accept: ".gzip,application/gzip,application/octet-stream"
+  hint: >-
+    Upload one file: N.world.gzip from the worlds folder on the laptop.
+    On Windows that folder is %USERPROFILE%\AppData\LocalLow\Pugstorm\Core Keeper\Steam\<SteamID>\worlds\
+    (AppData is hidden; slot 0 is the top world in the in-game menu).
+    The number in the filename does not matter. The file replaces the World slot
+    selected in Configuration, and a safety backup is taken first.
+    Characters stay on the player's computer, and the explored map may look fogged.
+    The server and the game client must be the same version (Steam public or beta).
+  reject:
+    - suffix: ".pugbackup"
+      error: >-
+        This is a Core Keeper automatic backup (.pugbackup), not the world
+        the server loads. Upload the single N.world.gzip from the worlds
+        folder (slot 0 is the top world in the in-game menu). If you really
+        mean to restore that backup, rename it so the name ends in .world.gzip
+        and upload it again.
+    - suffix: ".zip"
+      error: >-
+        This is a zip archive, not a world file. Do not upload CoreKeeperSaves.zip
+        or any other bundle. Open the worlds folder and upload the single
+        N.world.gzip file (for example 0.world.gzip).
+    - magic: "504b"
+      error: >-
+        This file is a zip archive (it starts with a zip header), even if it
+        was renamed. Do not upload CoreKeeperSaves.zip. Upload the single
+        N.world.gzip from the worlds folder instead.
+  errors:
+    empty: >-
+      The uploaded file is empty. Choose the N.world.gzip file in the worlds folder.
+    oversize: >-
+      That file is too large to be one Core Keeper world (limit 512 MB).
+      Upload the single N.world.gzip from the worlds folder, not a zip of every save.
+    suffix: >-
+      Upload a single world file whose name ends in .world.gzip
+      (for example 0.world.gzip from the worlds folder).
+    magic: >-
+      This file is not a gzip world save. Core Keeper worlds are N.world.gzip
+      files from the worlds folder.
+    content: >-
+      This file is not a valid gzip world save. Upload the original
+      N.world.gzip from the worlds folder.
+    damaged: >-
+      This file starts like a gzip world but the data is incomplete or damaged.
+      Upload the original N.world.gzip from the worlds folder again.
 # Wrapper sets up Xvfb, steamclient.so, and prints Game ID. Game argv follows.
 executable:
   - /opt/launch_wrapper.sh

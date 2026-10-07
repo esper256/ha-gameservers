@@ -100,7 +100,7 @@ Open Web UI follows the **active** slot:
 
 | Action | What happens when you bounce slots |
 | --- | --- |
-| World card / download / upload | Only the active file (`0.world.gzip`, …). Other slots stay on disk under `/data/world/worlds/` |
+| World card / download / upload | Only the active file (`0.world.gzip`, …). Other slots stay on disk under `/data/world/worlds/`. Upload accepts one raw `N.world.gzip` from the laptop worlds folder (not a zip or `.pugbackup`); see the Documentation tab for the Windows path |
 | **NEW WORLD** | Clears the **active** slot only |
 | Scheduled / manual backups | Named with that file (`…-0.world.gzip`). Retention (daily → weekly → monthly) is **per slot**, so slot 3’s history is not thinned when you are hosting slot 0 |
 | Pre-update snapshot | Newest **per slot** is kept |

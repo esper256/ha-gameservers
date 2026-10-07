@@ -56,6 +56,7 @@ from .world_save import (
     infer_world_kind,
     locate_active_world,
     prepare_world_download,
+    validate_world_upload,
     world_save_is_downloadable,
     world_upload_accepts,
 )
@@ -319,18 +320,42 @@ class GameServerSupervisor:
             "restore_pending": True,
         }
 
+    def _world_upload_error(self, staged: Path) -> str | None:
+        """Plugin upload rules, or the historical empty-file check.
+
+        Read-only. Does not stop the process or touch the live world.
+        """
+
+        spec = self.plugin.world_upload
+        if spec is None:
+            if not staged.is_file():
+                return "uploaded world file is missing or empty"
+            try:
+                size = staged.stat().st_size
+            except OSError:
+                size = 0
+            if size < 1:
+                return "uploaded world file is missing or empty"
+            return None
+        return validate_world_upload(spec, staged, filename=staged.name)
+
     def request_world_upload(self, staged_path: str | Path) -> dict[str, Any]:
-        """Schedule replacing the active world from a staged upload file."""
+        """Schedule replacing the active world from a staged upload file.
+
+        Declared ``world_upload`` rules run here, before the server is stopped
+        and before the live save is backed up or replaced.
+        """
 
         staged = Path(staged_path)
-        if not staged.is_file() or staged.stat().st_size < 1:
-            return {"ok": False, "error": "uploaded world file is missing or empty"}
+        error = self._world_upload_error(staged)
+        if error:
+            return {"ok": False, "error": error}
         active = locate_active_world(
             self.plugin,
             self.config.game_options,
             data_dir=self.plugin.data_dir,
         )
-        meta = world_upload_accepts(active)
+        meta = world_upload_accepts(active, self.plugin.world_upload)
         if not meta["uploadable"]:
             return {"ok": False, "error": str(meta["hint"])}
         with self._restore_lock:
@@ -374,7 +399,16 @@ class GameServerSupervisor:
         return safety
 
     def _apply_world_upload(self, staged: Path) -> None:
-        """Stop → safety backup → apply upload to active world → restart."""
+        """Stop → safety backup → apply upload to active world → restart.
+
+        Plugin upload rules are checked again before the process is stopped.
+        """
+
+        error = self._world_upload_error(staged)
+        if error:
+            self.last_restore_error = error
+            LOG.warning("World upload rejected before stop: %s", error)
+            raise RuntimeError(error)
 
         LOG.info("Applying world upload from %s", staged)
         self._activity = "restoring"
@@ -590,7 +624,9 @@ class GameServerSupervisor:
         world_size["downloadable"] = world_save_is_downloadable(
             active_world, data_dir=self.plugin.data_dir
         )
-        world_size.update(world_upload_accepts(active_world))
+        world_size.update(
+            world_upload_accepts(active_world, self.plugin.world_upload)
+        )
         phase = self.lifecycle()
         action = read_operator_action(self.config.state_dir)
         return {
@@ -1573,6 +1609,22 @@ class GameServerSupervisor:
                 restore_callback=self.request_restore,
                 upload_callback=self.request_world_upload,
                 upload_staging_dir=self.config.backup_dir,
+                upload_max_bytes=(
+                    self.plugin.world_upload.max_bytes
+                    if self.plugin.world_upload is not None
+                    and self.plugin.world_upload.max_bytes > 0
+                    else None
+                ),
+                upload_empty_error=(
+                    self.plugin.world_upload.message("empty")
+                    if self.plugin.world_upload is not None
+                    else ""
+                ),
+                upload_oversize_error=(
+                    self.plugin.world_upload.message("oversize")
+                    if self.plugin.world_upload is not None
+                    else ""
+                ),
                 world_download_callback=self.world_save_download,
                 restart_callback=self.request_restart,
                 world_switch_callback=self.request_world_switch,

@@ -1,5 +1,9 @@
 # Changelog
 
+## 3.16.0
+
+- An uploaded world file is owned by the game user, so the server can save over it.
+
 ## 3.15.0
 
 - No player-facing changes for this game.
