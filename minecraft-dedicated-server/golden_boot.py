@@ -92,7 +92,7 @@ def load_golden_install(directory: Path) -> tuple[str, str] | None:
     data = _read_json(directory / GOLDEN_META)
     loader = str(data.get("loader") or "").strip().lower()
     version = str(data.get("minecraft_version") or "").strip()
-    if loader in {"neoforge", "fabric"} and version:
+    if loader in {"neoforge", "fabric", "vanilla"} and version:
         return loader, version
     return None
 
@@ -265,7 +265,7 @@ def _maybe_promote(directory: Path, session: dict[str, Any]) -> None:
 
 def _promote(directory: Path, session: dict[str, Any]) -> None:
     ref = current_install(directory)
-    loader = (ref[0] if ref else str(session.get("loader") or "neoforge"))
+    loader = (ref[0] if ref else str(session.get("loader") or "vanilla"))
     version = (ref[1] if ref else str(session.get("minecraft_version") or ""))
     dest = directory / GOLDEN_DIR
     install_snapshot(mods_snapshot_dir(directory), dest)

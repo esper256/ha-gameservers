@@ -50,11 +50,17 @@ def _jar(path: Path, *, fabric: bool = True, mod_id: str = "cool_creepers") -> N
             )
 
 
-def _fake_neoforge(installs: Path, version: str) -> None:
-    inst = installs / f"neoforge-{version}"
-    inst.mkdir(parents=True)
+def _fake_install(installs: Path, loader: str, version: str) -> None:
+    inst = installs / f"{loader}-{version}"
+    inst.mkdir(parents=True, exist_ok=True)
     (inst / "server.jar").write_bytes(b"starter")
     (inst / "run.sh").write_text("#!/bin/sh\n", encoding="utf-8")
+    if loader == "fabric":
+        (inst / ".install.env").write_text("SERVER=server.jar\n", encoding="utf-8")
+
+
+def _fake_neoforge(installs: Path, version: str) -> None:
+    _fake_install(installs, "neoforge", version)
 
 
 def _has_golden(world: Path) -> bool:
@@ -66,7 +72,7 @@ def _has_golden(world: Path) -> bool:
             name = link.resolve().name
         except OSError:
             name = ""
-        if "neoforge-" in name or "fabric-" in name:
+        if "neoforge-" in name or "fabric-" in name or "vanilla-" in name:
             return True
     meta = world / "golden.json"
     if not meta.is_file():
@@ -109,7 +115,12 @@ def _boot_mode(world: Path) -> str:
     "golden restore is a later Minecraft-layer pass",
 )
 class GoldenBootContractTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._seed = patch.object(haos_defaults, "_seed_infrastructure", return_value=None)
+        self._seed.start()
+
     def tearDown(self) -> None:
+        self._seed.stop()
         for key in (
             "DATA_DIR",
             "STATE_DIR",
@@ -138,6 +149,10 @@ class GoldenBootContractTests(unittest.TestCase):
         Path(os.environ["STATE_DIR"]).mkdir(parents=True, exist_ok=True)
         _fake_neoforge(installs, "1.21.1")
         _fake_neoforge(installs, "1.21.11")
+        _fake_install(installs, "vanilla", "1.21.1")
+        _fake_install(installs, "vanilla", "1.21.11")
+        _fake_install(installs, "fabric", "1.21.1")
+        _fake_install(installs, "fabric", "1.21.11")
         (world / "profile.json").write_text(
             json.dumps({"loader": "neoforge"}),
             encoding="utf-8",
@@ -181,7 +196,7 @@ class GoldenBootContractTests(unittest.TestCase):
                 json.loads((world / "golden.json").read_text(encoding="utf-8")).get("stock")
             )
 
-    def test_pin_change_stock_ready_promotes_new_snapshot(self) -> None:
+    def test_configuration_edit_does_not_move_a_pinned_world(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             world = self._env(Path(tmp))
             (world / "uploaded_mods").mkdir(parents=True)
@@ -189,10 +204,12 @@ class GoldenBootContractTests(unittest.TestCase):
             self._probe(ready=True)
             self.assertTrue(_has_golden(world))
             _write_ha_pin(Path(tmp), "1.21.11")
+            os.environ["MINECRAFT_VERSION"] = "26.2"
             haos_defaults.prepare_game_command()
-            self.assertEqual(haos_defaults.current_install(world), ("neoforge", "1.21.11"))
-            self._probe(ready=True)
-            self.assertTrue((world / "golden_install").resolve().name.endswith("1.21.11"))
+            self.assertEqual(haos_defaults.current_install(world), ("vanilla", "1.21.1"))
+            profile = json.loads((world / "profile.json").read_text(encoding="utf-8"))
+            self.assertEqual(profile["minecraft_version"], "1.21.1")
+            self.assertTrue((world / "golden_install").resolve().name.endswith("vanilla-1.21.1"))
 
     def test_unproven_crash_boots_golden_without_rewriting_uploads(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -261,7 +278,7 @@ class GoldenBootContractTests(unittest.TestCase):
             self.assertEqual(_boot_mode(world), "attempt")
             self.assertTrue((world / "mods" / "cool_creepers.jar").is_file())
 
-    def test_ha_pin_edit_starts_new_attempt(self) -> None:
+    def test_ha_pin_edit_does_not_start_a_new_attempt(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             world = self._env(Path(tmp))
             (world / "uploaded_mods").mkdir(parents=True)
@@ -271,36 +288,33 @@ class GoldenBootContractTests(unittest.TestCase):
             self.assertEqual(_boot_mode(world), "golden")
             _write_ha_pin(Path(tmp), "1.21.11")
             haos_defaults.prepare_game_command()
-            self.assertEqual(_boot_mode(world), "attempt")
-            self.assertTrue((world / "server.jar").exists())
+            self.assertEqual(_boot_mode(world), "golden")
+            self.assertEqual(haos_defaults.current_install(world), ("vanilla", "1.21.1"))
 
-    def test_neoforge_pin_edit_starts_new_attempt(self) -> None:
+    def test_loader_swap_starts_new_attempt_on_the_same_version(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             world = self._env(Path(tmp), "1.21.11")
-            (world / "uploaded_mods").mkdir(parents=True)
+            uploaded = world / "uploaded_mods"
+            uploaded.mkdir(parents=True)
+            _jar(uploaded / "cool_creepers.jar", fabric=False)
             haos_defaults.prepare_game_command()
-            self._probe(ready=True)
+            self._probe(ready=True, player_count=1)
             haos_defaults.prepare_game_command()
             self.assertEqual(_boot_mode(world), "golden")
-            _write_ha_pin(Path(tmp), "1.21.11", neoforge_version="beta")
-            _fake_neoforge(Path(os.environ["INSTALL_DIR"]), "1.21.11-beta")
-            self.assertTrue(
-                golden_boot.should_restage(
-                    world, loader="neoforge", version="1.21.11-beta"
-                )
+            self.assertEqual(
+                haos_defaults.current_install(world), ("neoforge", "1.21.11")
             )
+            (uploaded / "cool_creepers.jar").unlink()
+            _jar(uploaded / "cool_creepers.jar", fabric=True)
             haos_defaults.prepare_game_command()
             self.assertEqual(_boot_mode(world), "attempt")
             self.assertEqual(
-                haos_defaults.current_install(world), ("neoforge", "1.21.11-beta")
+                haos_defaults.current_install(world), ("fabric", "1.21.11")
             )
-            self.assertFalse(
-                golden_boot.should_restage(
-                    world, loader="neoforge", version="1.21.11-beta"
-                )
-            )
+            profile = json.loads((world / "profile.json").read_text(encoding="utf-8"))
+            self.assertEqual(profile["minecraft_version"], "1.21.11")
 
-    def test_ha_options_json_pin_beats_stale_env(self) -> None:
+    def test_stale_env_does_not_override_a_pinned_world(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             world = self._env(Path(tmp))
             (world / "uploaded_mods").mkdir(parents=True)
@@ -314,30 +328,33 @@ class GoldenBootContractTests(unittest.TestCase):
                 encoding="utf-8",
             )
             os.environ["OPTIONS_FILE"] = str(options)
-            os.environ["MINECRAFT_VERSION"] = "1.21.1"
+            os.environ["MINECRAFT_VERSION"] = "26.2"
             haos_defaults.prepare_game_command()
-            self.assertEqual(_boot_mode(world), "attempt")
+            self.assertEqual(_boot_mode(world), "golden")
             session = json.loads((world / "boot.json").read_text(encoding="utf-8"))
-            self.assertEqual(session["minecraft_version"], "1.21.11")
+            self.assertEqual(session["minecraft_version"], "1.21.1")
 
-    def test_ha_pin_retries_after_unproven_fallback(self) -> None:
+    def test_crash_fallback_stays_on_the_pinned_version(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             world = self._env(Path(tmp))
-            (world / "uploaded_mods").mkdir(parents=True)
+            uploaded = world / "uploaded_mods"
+            uploaded.mkdir(parents=True)
             haos_defaults.prepare_game_command()
             self._probe(ready=True)
             self.assertTrue(_has_golden(world))
-            _write_ha_pin(Path(tmp), "1.21.11")
+            _jar(uploaded / "cool_creepers.jar", fabric=False)
             haos_defaults.prepare_game_command()
             self.assertEqual(_boot_mode(world), "attempt")
             os.environ["GAME_START_REASON"] = "crash"
             haos_defaults.prepare_game_command()
             self.assertEqual(_boot_mode(world), "golden")
+            self.assertEqual(haos_defaults.current_install(world), ("vanilla", "1.21.1"))
             os.environ["GAME_START_REASON"] = "boot"
             haos_defaults.prepare_game_command()
             self.assertEqual(_boot_mode(world), "attempt")
             session = json.loads((world / "boot.json").read_text(encoding="utf-8"))
-            self.assertEqual(session["minecraft_version"], "1.21.11")
+            self.assertEqual(session["minecraft_version"], "1.21.1")
+            self.assertEqual(session["loader"], "neoforge")
 
     def test_publish_marks_attempt_request(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -368,18 +385,22 @@ class GoldenBootContractTests(unittest.TestCase):
     def test_missing_golden_install_falls_back_to_attempt(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             world = self._env(Path(tmp))
-            (world / "uploaded_mods").mkdir(parents=True)
+            uploaded = world / "uploaded_mods"
+            uploaded.mkdir(parents=True)
+            _jar(uploaded / "cool_creepers.jar", fabric=False)
             haos_defaults.prepare_game_command()
-            self._probe(ready=True)
+            self._probe(ready=True, player_count=1)
             self.assertTrue(_has_golden(world))
-            _write_ha_pin(Path(tmp), "1.21.11")
+            (uploaded / "cool_creepers.jar").unlink()
+            _jar(uploaded / "cool_creepers.jar", fabric=True)
             haos_defaults.prepare_game_command()
             self.assertEqual(_boot_mode(world), "attempt")
             shutil.rmtree(Path(os.environ["INSTALL_DIR"]) / "neoforge-1.21.1")
+            os.environ["GAME_START_REASON"] = "crash"
             cmd = haos_defaults.prepare_game_command()
             self.assertIsNotNone(cmd)
             self.assertEqual(_boot_mode(world), "attempt")
-            self.assertTrue((world / "server.jar").exists())
+            self.assertEqual(haos_defaults.current_install(world), ("fabric", "1.21.1"))
 
     def test_restage_uses_install_link_not_saved_pin_copies(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -473,6 +494,34 @@ class GoldenBootContractTests(unittest.TestCase):
             self.assertTrue(
                 golden_boot.should_restage(world, loader="neoforge", version="1.21.11")
             )
+
+    def test_golden_of_a_different_minecraft_version_is_not_used(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            world = self._env(Path(tmp), "1.21.1")
+            uploaded = world / "uploaded_mods"
+            uploaded.mkdir(parents=True)
+            _jar(uploaded / "cool_creepers.jar", fabric=False)
+            (world / "profile.json").write_text(
+                json.dumps(
+                    {"loader": "neoforge", "minecraft_version": "1.21.1"}
+                ),
+                encoding="utf-8",
+            )
+            (world / "golden_mods").mkdir()
+            golden_boot.write_golden_install(world, loader="neoforge", version="1.21.11")
+            golden_boot.write_boot_session(
+                world,
+                mode="attempt",
+                loader="neoforge",
+                minecraft_version="1.21.1",
+                stock=False,
+                needs_player=True,
+            )
+            os.environ["GAME_START_REASON"] = "crash"
+            cmd = haos_defaults.prepare_game_command()
+            self.assertIsNotNone(cmd)
+            self.assertEqual(haos_defaults.current_install(world), ("neoforge", "1.21.1"))
+            self.assertNotIn("1.21.11", str((world / "server.jar").resolve()))
 
     def test_minecraft_only_state_no_supervisor_golden_api(self) -> None:
         base = ROOT / "game-server-base"

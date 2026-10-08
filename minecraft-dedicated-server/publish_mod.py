@@ -18,25 +18,16 @@ from haos_defaults import (  # noqa: E402
     active_world_name,
     install_atomic,
     is_automodpack_fingerprint_name,
-    minecraft_version,
     profile_dir,
-    read_profile,
+    resolve_world_version,
     state_dir,
     uploaded_mods_dir,
 )
+from mod_scan import ModHit, classify_jar, requirement_status
 
 HISTORY_KEEP = 10
 DEBOUNCE_SECONDS = 20
 MOD_ID_RE = re.compile(r"^[a-z][a-z0-9_]{1,63}$")
-MODID_TOML_RE = re.compile(
-    r'^\s*(?:modId|modid)\s*=\s*"([^"]+)"',
-    re.IGNORECASE | re.MULTILINE,
-)
-ENV_TOML_RE = re.compile(
-    r'^\s*(?:side|displayTest)\s*=\s*"([^"]+)"',
-    re.IGNORECASE | re.MULTILINE,
-)
-MC_TOKEN_RE = re.compile(r"1\.\d+(?:\.\d+)?")
 
 
 def publisher_root() -> Path:
@@ -55,96 +46,43 @@ def _fail(message: str, incoming: Path | None, quarantine: Path) -> int:
     return 1
 
 
-def _read_json_from_zip(zf: zipfile.ZipFile, name: str) -> dict[str, Any] | None:
-    try:
-        with zf.open(name) as handle:
-            data = json.loads(handle.read().decode("utf-8"))
-    except (KeyError, UnicodeDecodeError, json.JSONDecodeError):
-        return None
-    return data if isinstance(data, dict) else None
-
-
-def _read_text_from_zip(zf: zipfile.ZipFile, name: str) -> str | None:
-    try:
-        with zf.open(name) as handle:
-            return handle.read().decode("utf-8")
-    except (KeyError, UnicodeDecodeError):
-        return None
-
-
-def _toml_dep_ranges(toml: str) -> dict[str, str]:
-    out: dict[str, str] = {}
-    for chunk in re.split(r"\[\[dependencies", toml, flags=re.IGNORECASE):
-        mod = re.search(r'modId\s*=\s*"([^"]+)"', chunk, re.IGNORECASE)
-        rng = re.search(r'versionRange\s*=\s*"([^"]+)"', chunk, re.IGNORECASE)
-        if mod and rng:
-            out[mod.group(1).strip().lower()] = rng.group(1).strip()
-    return out
-
-
-def _fabric_minecraft_spec(fabric: dict[str, Any]) -> str:
-    depends = fabric.get("depends")
-    if not isinstance(depends, dict):
-        return ""
-    raw = depends.get("minecraft")
-    if isinstance(raw, list):
-        return ",".join(str(item) for item in raw)
-    return str(raw or "").strip()
-
-
 def minecraft_spec_covers(spec: str, world_version: str) -> bool:
-    """True if the jar does not name a different Minecraft than this world."""
+    """True unless metadata parses and excludes this world's Minecraft version."""
 
-    spec = (spec or "").strip()
-    world = (world_version or "").strip()
-    if not spec or spec in {"*", ""} or not world:
-        return True
-    tokens = MC_TOKEN_RE.findall(spec)
-    if not tokens:
-        return True
-    if world in tokens:
-        return True
-    return False
+    hit = ModHit(
+        name="",
+        loader="fabric",
+        minecraft_spec=spec,
+        specs=(spec,) if str(spec or "").strip() else (),
+    )
+    return requirement_status(hit, world_version) != "incompatible"
 
 
 def inspect_jar(path: Path) -> dict[str, Any]:
-    with zipfile.ZipFile(path) as zf:
-        names = set(zf.namelist())
-        fabric = _read_json_from_zip(zf, "fabric.mod.json")
-        toml = None
-        for candidate in (
-            "META-INF/neoforge.mods.toml",
-            "META-INF/mods.toml",
-        ):
-            if candidate in names:
-                toml = _read_text_from_zip(zf, candidate)
-                if toml:
-                    break
-    if fabric:
-        mod_id = str(fabric.get("id") or "").strip()
-        environment = str(fabric.get("environment") or "*").strip() or "*"
+    hit = classify_jar(path)
+    if hit.loader in {"fabric", "neoforge"}:
         return {
-            "loader": "fabric",
-            "mod_id": mod_id,
-            "environment": environment,
-            "version": str(fabric.get("version") or ""),
-            "name": str(fabric.get("name") or mod_id),
-            "minecraft_spec": _fabric_minecraft_spec(fabric),
+            "loader": hit.loader,
+            "mod_id": hit.mod_id,
+            "environment": hit.environment,
+            "version": hit.version,
+            "name": hit.display_name or hit.mod_id,
+            "minecraft_spec": hit.minecraft_spec,
+            "minecraft_specs": hit.specs,
         }
-    if toml:
-        match = MODID_TOML_RE.search(toml)
-        mod_id = match.group(1).strip() if match else ""
-        side_match = ENV_TOML_RE.search(toml)
-        environment = side_match.group(1).strip() if side_match else "*"
-        deps = _toml_dep_ranges(toml)
-        return {
-            "loader": "neoforge",
-            "mod_id": mod_id,
-            "environment": environment,
-            "version": "",
-            "name": mod_id,
-            "minecraft_spec": deps.get("minecraft") or "",
-        }
+    if hit.loader == "forge":
+        raise ValueError(
+            f"{path.name} is a Forge mod (META-INF/mods.toml). "
+            "Upload a Fabric or NeoForge jar."
+        )
+    if hit.loader == "quilt":
+        raise ValueError(
+            f"{path.name} is a Quilt mod without Fabric metadata. Quilt is not supported."
+        )
+    if hit.loader == "mixed":
+        raise ValueError(f"{path.name} contains both Fabric and NeoForge metadata.")
+    if hit.loader == "unknown":
+        raise ValueError(hit.detail or f"{path.name} metadata could not be read")
     raise ValueError("JAR is not a Fabric or NeoForge mod (missing metadata)")
 
 
@@ -197,25 +135,34 @@ def publish(incoming: Path) -> int:
     if mod_id in PROTECTED_MOD_IDS:
         return _fail(f"Refusing to replace protected mod {mod_id}", incoming, quarantine)
     world = profile_dir(active_world_name())
-    profile = read_profile(world)
-    loader = str(profile.get("loader") or "neoforge").lower()
-    jar_loader = str(info.get("loader") or "")
-    if jar_loader and jar_loader != loader:
+    try:
+        world_mc = resolve_world_version(world)
+    except MinecraftPinError as exc:
+        return _fail(str(exc), incoming, quarantine)
+    specs = info.get("minecraft_specs")
+    if not isinstance(specs, tuple):
+        spec = str(info.get("minecraft_spec") or "")
+        specs = (spec,) if spec else ()
+    hit = ModHit(
+        name=incoming.name,
+        loader=str(info.get("loader") or "fabric"),
+        mod_id=mod_id,
+        minecraft_spec=str(info.get("minecraft_spec") or ""),
+        specs=tuple(specs),
+    )
+    status = requirement_status(hit, world_mc)
+    if status == "incompatible":
+        shown = hit.minecraft_spec or ", ".join(hit.specs)
         return _fail(
-            f"This world uses {loader}; the JAR is {jar_loader}",
+            f"This world is Minecraft {world_mc}; the JAR supports {shown}",
             incoming,
             quarantine,
         )
-    try:
-        world_mc = minecraft_version()
-    except MinecraftPinError as exc:
-        return _fail(str(exc), incoming, quarantine)
-    spec = str(info.get("minecraft_spec") or "")
-    if world_mc and not minecraft_spec_covers(spec, world_mc):
-        return _fail(
-            f"This world is Minecraft {world_mc}; the JAR asks for {spec}",
-            incoming,
-            quarantine,
+    if status == "unknown":
+        print(
+            f"Warning: {incoming.name}: could not parse Minecraft requirement "
+            f"{hit.minecraft_spec!r}; not blocking",
+            file=sys.stderr,
         )
     dest_dir = uploaded_mods_dir(world)
     if _client_only(str(info.get("environment") or "*")):

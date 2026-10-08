@@ -64,6 +64,7 @@ RUN useradd -m -u 1000 -s /bin/bash gameserver \
 COPY game_server /opt/game_server
 COPY games/game.yaml /opt/games/game.yaml
 COPY haos_defaults.py /opt/haos_defaults.py
+COPY mod_scan.py /opt/mod_scan.py
 COPY golden_boot.py /opt/golden_boot.py
 COPY publish_mod.py /opt/publish_mod.py
 COPY launch_wrapper.sh /opt/launch_wrapper.sh
@@ -76,7 +77,7 @@ WORKDIR /data/worlds
 
 LABEL \
   io.hass.name="Minecraft Dedicated Server" \
-  io.hass.description="Minecraft Java server with Fabric/NeoForge worlds, AutoModpack, and a LAN mod-upload page" \
+  io.hass.description="Minecraft Java server. Each world pins a version; the loader is detected from uploaded mods (empty folder is vanilla)." \
   io.hass.type="app" \
   io.hass.version="${BUILD_VERSION}" \
   io.hass.arch="${BUILD_ARCH}" \
