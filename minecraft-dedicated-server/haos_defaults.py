@@ -38,7 +38,11 @@ SEALED_MODE = 0o444
 UPLOADED_MODS = "uploaded_mods"
 MODS_SNAPSHOT = "mods"
 AUTOMODPACK_CERT_REL = Path("automodpack") / ".private" / "cert.crt"
+AUTOMODPACK_KEY_REL = Path("automodpack") / ".private" / "key.pem"
 AUTOMODPACK_FINGERPRINT_NAME = "AUTOMODPACK-FINGERPRINT.txt"
+# Outside every world folder. World backups restore automodpack/.private;
+# the next prepare/boot points that folder back at this pair.
+IDENTITY_DIR_NAME = "automodpack-identity"
 
 
 class MinecraftPinError(RuntimeError):
@@ -240,7 +244,7 @@ def automodpack_fingerprint_text(fingerprint: str) -> str:
         f"{fingerprint}\n"
         "\n"
         "This is public (the hash of the server cert). Same value for "
-        "every player. It is not a password.\n"
+        "every world and every player. It is not a password.\n"
     )
 
 
@@ -274,6 +278,167 @@ def write_automodpack_fingerprint_file(
             pass
         return None
     return dest
+
+
+def identity_dir() -> Path:
+    """Canonical AutoModpack cert+key. Not inside a world, not on the upload page."""
+
+    override = os.environ.get("AUTOMODPACK_IDENTITY_DIR")
+    if override:
+        return Path(override)
+    return worlds_dir().parent / IDENTITY_DIR_NAME
+
+
+def _identity_files() -> tuple[Path, Path]:
+    root = identity_dir()
+    return root / "cert.crt", root / "key.pem"
+
+
+def _world_identity_files(directory: Path) -> tuple[Path, Path]:
+    return directory / AUTOMODPACK_CERT_REL, directory / AUTOMODPACK_KEY_REL
+
+
+def _pair_ready(cert: Path, key: Path) -> bool:
+    try:
+        return (
+            cert.is_file()
+            and key.is_file()
+            and cert.stat().st_size > 0
+            and key.stat().st_size > 0
+        )
+    except OSError:
+        return False
+
+
+def _copy_identity_file(src: Path, dest: Path, mode: int) -> None:
+    data = src.read_bytes()
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_name(dest.name + ".tmp")
+    tmp.write_bytes(data)
+    os.chmod(tmp, mode)
+    os.replace(tmp, dest)
+    os.chmod(dest, mode)
+
+
+def _install_canonical_from(source: Path) -> None:
+    src_cert, src_key = _world_identity_files(source)
+    canon_cert, canon_key = _identity_files()
+    root = canon_cert.parent
+    root.mkdir(parents=True, exist_ok=True)
+    os.chmod(root, 0o700)
+    _copy_identity_file(src_cert, canon_cert, 0o644)
+    _copy_identity_file(src_key, canon_key, 0o600)
+
+
+def _force_symlink(src: Path, dest: Path) -> bool:
+    """Point dest at src. Replaces a restored regular file. True if it changed."""
+
+    target = src.resolve()
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if dest.is_symlink():
+        try:
+            if dest.resolve() == target:
+                return False
+        except OSError:
+            pass
+    tmp = dest.with_name(f".{dest.name}.link")
+    if tmp.is_symlink() or tmp.exists():
+        tmp.unlink()
+    tmp.symlink_to(target)
+    os.replace(tmp, dest)
+    return True
+
+
+def _world_used_at(directory: Path) -> float:
+    """Prefer a boot/golden session over the cert's own mtime."""
+
+    for name in ("boot.json", "golden.json"):
+        path = directory / name
+        try:
+            if path.is_file():
+                return path.stat().st_mtime
+        except OSError:
+            pass
+    cert, _key = _world_identity_files(directory)
+    try:
+        if cert.is_file():
+            return cert.stat().st_mtime
+    except OSError:
+        pass
+    try:
+        return directory.stat().st_mtime
+    except OSError:
+        return 0.0
+
+
+def _worlds_with_identity() -> list[Path]:
+    root = worlds_dir()
+    if not root.is_dir():
+        return []
+    found: list[Path] = []
+    for child in root.iterdir():
+        if not child.is_dir():
+            continue
+        cert, key = _world_identity_files(child)
+        if _pair_ready(cert, key):
+            found.append(child)
+    return found
+
+
+def _adoption_source() -> Path | None:
+    """Active world's pair, else the most recently used world that has one."""
+
+    found = _worlds_with_identity()
+    if not found:
+        return None
+    active = profile_dir().resolve()
+    for directory in found:
+        try:
+            if directory.resolve() == active:
+                return directory
+        except OSError:
+            continue
+    return max(found, key=_world_used_at)
+
+
+def sync_automodpack_identity(directory: Path) -> None:
+    """Make this world use the one shared AutoModpack cert and key.
+
+    AutoModpack 4.0.6 generates ``cert.crt`` and ``key.pem`` only when either
+    file is missing, and it reads them through ``File`` / ``Files.exists``,
+    which follow symlinks. A symlink is enough to stop it minting a new pair.
+
+    A world backup can restore an old per-world pair. That pair is replaced
+    with symlinks on the next prepare/boot. The canonical files are never
+    overwritten once they exist.
+    """
+
+    directory.mkdir(parents=True, exist_ok=True)
+    canon_cert, canon_key = _identity_files()
+    if not _pair_ready(canon_cert, canon_key):
+        source = _adoption_source()
+        if source is not None:
+            _install_canonical_from(source)
+            print(
+                "Adopted AutoModpack certificate from "
+                f"{source.name} into {canon_cert.parent} "
+                "(shared by every world)",
+                flush=True,
+            )
+    if not _pair_ready(canon_cert, canon_key):
+        return
+    world_cert, world_key = _world_identity_files(directory)
+    changed = _force_symlink(canon_cert, world_cert)
+    changed = _force_symlink(canon_key, world_key) or changed
+    try:
+        os.chmod(world_cert.parent, 0o700)
+    except OSError:
+        pass
+    if changed:
+        print(
+            f"World {directory.name} uses the shared AutoModpack certificate",
+            flush=True,
+        )
 
 
 def _is_partial_name(name: str) -> bool:
@@ -644,6 +809,7 @@ def cmd_prepare_world() -> int:
     (directory / "config").mkdir(parents=True, exist_ok=True)
     migrate_legacy_mods(directory)
     uploaded_mods_dir(directory).mkdir(parents=True, exist_ok=True)
+    sync_automodpack_identity(directory)
     error = apply_world_loader(directory, created)
     eula = env_or_option("eula", "true").lower() in {"1", "true", "yes", "on"}
     (directory / "eula.txt").write_text(
@@ -966,6 +1132,7 @@ def prepare_game_command() -> list[str] | None:
     )
 
     directory = profile_dir()
+    sync_automodpack_identity(directory)
     error = apply_world_loader(directory)
     if error:
         print(error, file=sys.stderr, flush=True)
@@ -1364,6 +1531,7 @@ def cmd_status_probe() -> int:
         status = minecraft_status_payload("127.0.0.1", game_port)
     except (OSError, json.JSONDecodeError, UnicodeDecodeError, ValueError):
         status = {}
+    sync_automodpack_identity(directory)
     if "ready" in status:
         findings["ready"] = True
         write_automodpack_fingerprint_file(directory)
@@ -1414,6 +1582,9 @@ def cmd_write_copyparty_banner() -> int:
     uploaded = uploaded_mods_dir()
     uploaded.mkdir(parents=True, exist_ok=True)
     _sweep_drop_junk(uploaded)
+    from publish_mod import sweep_uploaded_non_jars
+
+    sweep_uploaded_non_jars(uploaded)
     (uploaded / ".prologue.html").write_text(
         """\
 <div style="max-width:42rem;margin:1rem 0 1.25rem;padding:1rem 1.15rem;\
@@ -1423,7 +1594,8 @@ font-family:sans-serif;line-height:1.45">
   <p style="margin:0.6rem 0 0">This is the <em>upload</em> folder, not the
   running server&rsquo;s copy. Drop a <code>.jar</code> to add or replace
   a mod (same mod id replaces the last build even if the filename is
-  different). Delete a jar to take it off next restart (not AutoModpack).
+  different). Only <code>.jar</code> files are accepted. Delete a jar to
+  take it off next restart (not AutoModpack).
   An empty folder runs vanilla. Fabric jars run Fabric, NeoForge jars
   run NeoForge, for this world&rsquo;s Minecraft version. Do not mix them.</p>
   <p style="margin:0.6rem 0 0">The game keeps the last proven snapshot
@@ -1432,7 +1604,8 @@ font-family:sans-serif;line-height:1.45">
   Minecraft if AutoModpack asks.</p>
   <p style="margin:0.6rem 0 0">After the server has started once, copy
   <code>AUTOMODPACK-FINGERPRINT.txt</code> (read-only) and paste it when
-  the Minecraft client warns about mods.</p>
+  the Minecraft client warns about mods. Every world shows the same
+  fingerprint.</p>
 </div>
 """,
         encoding="utf-8",

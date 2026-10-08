@@ -188,16 +188,57 @@ def publish(incoming: Path) -> int:
     return 0
 
 
-def _skip_inbox_path(path: Path) -> bool:
-    name = path.name
+def _leave_upload_name(name: str) -> bool:
+    """Dotfiles, in-progress Copyparty temps, and the fingerprint stay put."""
+
+    if is_automodpack_fingerprint_name(name):
+        return True
     if name.startswith("."):
         return True
-    lower = name.lower()
-    if lower.endswith(".partial"):
-        return True
-    if not lower.endswith(".jar"):
-        return True
-    return False
+    return name.lower().endswith(".partial")
+
+
+def _skip_inbox_path(path: Path) -> bool:
+    return _leave_upload_name(path.name)
+
+
+def quarantine_non_jar(path: Path) -> int:
+    """Move a non-jar out of the drop folder and say why."""
+
+    print(
+        f"Removed {path.name}: only .jar files are allowed in the mods folder",
+        file=sys.stderr,
+    )
+    quarantine = publisher_root() / "quarantine"
+    if path.is_file():
+        quarantine.mkdir(parents=True, exist_ok=True)
+        dest = quarantine / path.name
+        try:
+            if dest.exists():
+                dest.unlink()
+            shutil.move(str(path), str(dest))
+        except OSError:
+            path.unlink(missing_ok=True)
+    return 1
+
+
+def sweep_uploaded_non_jars(folder: Path | None = None) -> int:
+    """Quarantine non-jars that got into the drop folder. Leave the fingerprint."""
+
+    folder = folder or uploaded_mods_dir(profile_dir())
+    if not folder.is_dir():
+        return 0
+    rc = 0
+    for path in list(folder.iterdir()):
+        if not path.is_file():
+            continue
+        if _leave_upload_name(path.name):
+            continue
+        if path.suffix.lower() == ".jar":
+            continue
+        quarantine_non_jar(path)
+        rc = 1
+    return rc
 
 
 def paths_from_xiu_payload(raw: str) -> list[Path]:
@@ -244,11 +285,18 @@ def publish_paths(paths: list[Path]) -> int:
         path = Path(raw)
         if _skip_inbox_path(path):
             continue
+        if path.suffix.lower() != ".jar":
+            if path.is_file():
+                quarantine_non_jar(path)
+                rc = 1
+            continue
         if not path.is_file():
             continue
         result = publish(path)
         if result not in (0,):
             rc = result
+    if sweep_uploaded_non_jars():
+        rc = 1
     return rc
 
 
@@ -344,6 +392,12 @@ def guard_upload(path: Path) -> int:
         return 2
     if name.startswith(".") or name.lower().endswith(".partial"):
         return 0
+    if resolved.suffix.lower() != ".jar":
+        print(
+            f"Refusing upload {name}: only .jar files are allowed in the mods folder",
+            file=sys.stderr,
+        )
+        return 2
     if resolved.is_file() and resolved.suffix.lower() == ".jar":
         try:
             info = inspect_jar(resolved)

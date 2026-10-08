@@ -16,7 +16,7 @@ Accept the Minecraft EULA (the **EULA** option, default on). Mojang requires thi
    - Every detected mod is NeoForge: the newest NeoForge build for this world's Minecraft version, plus AutoModpack.
    - Fabric and NeoForge jars together, a Forge jar, a Quilt-only jar, or a mod whose metadata says it does not support this world's version: the server refuses to start. The log names the jars.
    - Replacing Fabric mods with NeoForge mods (or the other way) switches the loader on the next boot. The Minecraft version does not change.
-6. On each player PC: a Prism instance with the **same Minecraft version** as the world, the matching loader (or vanilla), and AutoModpack when the folder is not empty. Open the mod-upload page and copy `AUTOMODPACK-FINGERPRINT.txt` (it appears after the first successful modded start). Join once, paste that fingerprint when the client warns about mods, let mods sync, relaunch. Same value for every player.
+6. On each player PC: a Prism instance with the **same Minecraft version** as the world, the matching loader (or vanilla), and AutoModpack when the folder is not empty. Open the mod-upload page and copy `AUTOMODPACK-FINGERPRINT.txt` (it appears after the first successful modded start). Join once, paste that fingerprint when the client warns about mods, let mods sync, relaunch. The same fingerprint is used for every world, so players accept it once.
 
 ## OPEN WEB UI
 
@@ -26,7 +26,9 @@ World switch/create, backups, restore, status. Home Assistant Ingress — no ext
 
 Open `http://<home-assistant-host>:<upload-host-port>/` (the host port on **Network** for container 8765; default 8765), sign in as **mods** with the upload page password. The page is a file drop, not a media site: the player, search, zip, and other Copyparty extras are turned off.
 
-This site is the **upload** folder (`uploaded_mods/`), not the running server’s `mods/` snapshot. Drop a JAR to add or replace a mod (same mod id replaces the last build even if the filename is different). The jar must support this world’s Minecraft version. You do not pick a loader; the jars decide it. Do not upload NeoForge/Fabric installer jars, Forge mods, or Quilt-only mods.
+This site is the **upload** folder (`uploaded_mods/`), not the running server’s `mods/` snapshot. Drop a `.jar` to add or replace a mod (same mod id replaces the last build even if the filename is different). Anything that is not a `.jar` is refused. The jar must support this world’s Minecraft version. You do not pick a loader; the jars decide it. Do not upload NeoForge/Fabric installer jars, Forge mods, or Quilt-only mods.
+
+Every world shares one AutoModpack certificate, kept in `/data/automodpack-identity/` (not in the upload folder, and not in a world backup). `AUTOMODPACK-FINGERPRINT.txt` in each world shows that same value. The private key stays next to that certificate. A world restore can put an old per-world certificate back; the next start points the world at the shared one again.
 
 Minecraft stages a snapshot of the upload folder into `mods/` when the loader or the upload set changes. Delete a jar on the same page to take it off the next *attempt* (not AutoModpack / Fabric API). If nobody is connected, the game restarts after a short pause so several jars can land together. If anyone is playing, it waits until the last player leaves, then restarts. Relaunch Minecraft if AutoModpack asks. If a valid launch crashes before it is proven, the last proven snapshot starts again, and only when that snapshot is the same Minecraft version as the world. A snapshot from a different version is never used. The upload folder is left as your next experiment. Home Assistant restarts the add-on if even that snapshot will not start.
 

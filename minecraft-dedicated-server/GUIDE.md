@@ -35,7 +35,7 @@ Each world pins its own Minecraft version. Drop mods on a LAN page and the loade
 4. Forward the Minecraft Java port you mapped in the add-on Network settings. Keep the upload port on the LAN.
 5. Create worlds in **Open Web UI** and pick a Minecraft version. The first automatic world is 1.21.1. To change a world's version later, edit `profile.json` `minecraft_version` in that world's folder.
 6. Drop mods in the upload page. An empty folder is vanilla. All-Fabric or all-NeoForge installs that loader and AutoModpack. Mixed jars refuse to start.
-7. Prism: one instance with the same Minecraft version and the loader the world detected. Copy `AUTOMODPACK-FINGERPRINT.txt` from the mod-upload page (after the first modded start) and paste it when the client warns about mods, then relaunch.
+7. Prism: one instance with the same Minecraft version and the loader the world detected. Copy `AUTOMODPACK-FINGERPRINT.txt` from the mod-upload page (after the first modded start) and paste it when the client warns about mods, then relaunch. That fingerprint is the same on every world. The upload page accepts `.jar` files only.
 
 The version list on New world is the releases that have both a stable Fabric build and a stable NeoForge build. Adding a newer release takes an add-on update.
 

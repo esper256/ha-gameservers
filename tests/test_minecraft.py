@@ -1710,5 +1710,237 @@ class ModScanTests(unittest.TestCase):
             self.assertEqual(mod_scan.scan_mods(folder, "1.21.1").loader, "fabric")
 
 
+def _openssl_pair(directory: Path, name: str) -> tuple[Path, Path]:
+    cert = directory / f"{name}.crt"
+    key = directory / f"{name}.key"
+    subprocess.check_call(
+        [
+            "openssl",
+            "req",
+            "-x509",
+            "-newkey",
+            "rsa:2048",
+            "-nodes",
+            "-keyout",
+            str(key),
+            "-out",
+            str(cert),
+            "-days",
+            "30",
+            "-subj",
+            f"/CN={name}",
+        ],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    return cert, key
+
+
+def _plant_identity(world: Path, cert: Path, key: Path) -> None:
+    private = world / "automodpack" / ".private"
+    private.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(cert, private / "cert.crt")
+    shutil.copyfile(key, private / "key.pem")
+
+
+class SharedAutoModpackCertTests(unittest.TestCase):
+    def _layout(self, tmp: Path) -> tuple[Path, Path]:
+        worlds = tmp / "worlds"
+        worlds.mkdir()
+        state = tmp / "state"
+        state.mkdir()
+        os.environ["DATA_DIR"] = str(worlds)
+        os.environ["STATE_DIR"] = str(state)
+        os.environ.pop("AUTOMODPACK_IDENTITY_DIR", None)
+        return worlds, state
+
+    def _activate(self, state: Path, name: str) -> None:
+        (state / "active_world.json").write_text(
+            json.dumps({"value": name}), encoding="utf-8"
+        )
+
+    def test_two_worlds_share_one_cert_and_fingerprint(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            worlds, state = self._layout(root)
+            cert, key = _openssl_pair(root, "trusted")
+            first = worlds / "World"
+            second = worlds / "Creative"
+            first.mkdir()
+            second.mkdir()
+            _plant_identity(first, cert, key)
+            (first / "boot.json").write_text("{}\n", encoding="utf-8")
+            self._activate(state, "World")
+            haos_defaults.sync_automodpack_identity(first)
+            haos_defaults.sync_automodpack_identity(second)
+            canon = root / "automodpack-identity"
+            self.assertEqual((canon / "cert.crt").read_bytes(), cert.read_bytes())
+            self.assertEqual((canon / "key.pem").stat().st_mode & 0o777, 0o600)
+            for world in (first, second):
+                private = world / "automodpack" / ".private"
+                self.assertTrue((private / "cert.crt").is_symlink())
+                self.assertTrue((private / "key.pem").is_symlink())
+                self.assertEqual((private / "cert.crt").resolve(), (canon / "cert.crt").resolve())
+                self.assertEqual((private / "key.pem").resolve(), (canon / "key.pem").resolve())
+                text_path = haos_defaults.write_automodpack_fingerprint_file(world)
+                assert text_path is not None
+                self.assertTrue(text_path.is_file())
+            left = (first / "uploaded_mods" / "AUTOMODPACK-FINGERPRINT.txt").read_text(
+                encoding="utf-8"
+            )
+            right = (second / "uploaded_mods" / "AUTOMODPACK-FINGERPRINT.txt").read_text(
+                encoding="utf-8"
+            )
+            self.assertEqual(left, right)
+            self.assertIn(haos_defaults.automodpack_tls_fingerprint(first) or "", left)
+            uploaded_names = {path.name for path in (first / "uploaded_mods").iterdir()}
+            self.assertNotIn("key.pem", uploaded_names)
+            self.assertNotIn("cert.crt", uploaded_names)
+            self.assertFalse((first / "uploaded_mods" / "key.pem").exists())
+
+    def test_migration_adopts_the_active_world_cert(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            worlds, state = self._layout(root)
+            trusted_cert, trusted_key = _openssl_pair(root, "trusted")
+            other_cert, other_key = _openssl_pair(root, "other")
+            active = worlds / "Survival"
+            newer = worlds / "Newer"
+            active.mkdir()
+            newer.mkdir()
+            _plant_identity(active, trusted_cert, trusted_key)
+            _plant_identity(newer, other_cert, other_key)
+            now = 1_700_000_000
+            (active / "boot.json").write_text("{}\n", encoding="utf-8")
+            (newer / "boot.json").write_text("{}\n", encoding="utf-8")
+            os.utime(active / "boot.json", (now, now))
+            os.utime(newer / "boot.json", (now + 5000, now + 5000))
+            self._activate(state, "Survival")
+            empty = worlds / "Empty"
+            empty.mkdir()
+            haos_defaults.sync_automodpack_identity(empty)
+            canon = root / "automodpack-identity" / "cert.crt"
+            self.assertEqual(canon.read_bytes(), trusted_cert.read_bytes())
+            self.assertNotEqual(canon.read_bytes(), other_cert.read_bytes())
+
+    def test_migration_uses_the_most_recent_world_when_active_has_no_cert(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            worlds, state = self._layout(root)
+            old_cert, old_key = _openssl_pair(root, "old")
+            new_cert, new_key = _openssl_pair(root, "new")
+            old = worlds / "Old"
+            new = worlds / "New"
+            old.mkdir()
+            new.mkdir()
+            _plant_identity(old, old_cert, old_key)
+            _plant_identity(new, new_cert, new_key)
+            now = 1_700_000_000
+            (old / "boot.json").write_text("{}\n", encoding="utf-8")
+            (new / "boot.json").write_text("{}\n", encoding="utf-8")
+            os.utime(old / "boot.json", (now, now))
+            os.utime(new / "boot.json", (now + 5000, now + 5000))
+            self._activate(state, "Empty")
+            (worlds / "Empty").mkdir()
+            haos_defaults.sync_automodpack_identity(worlds / "Empty")
+            canon = root / "automodpack-identity" / "cert.crt"
+            self.assertEqual(canon.read_bytes(), new_cert.read_bytes())
+
+    def test_restored_world_cert_does_not_replace_the_shared_one(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            worlds, state = self._layout(root)
+            trusted_cert, trusted_key = _openssl_pair(root, "trusted")
+            restored_cert, restored_key = _openssl_pair(root, "restored")
+            world = worlds / "World"
+            world.mkdir()
+            _plant_identity(world, trusted_cert, trusted_key)
+            self._activate(state, "World")
+            haos_defaults.sync_automodpack_identity(world)
+            canon = root / "automodpack-identity" / "cert.crt"
+            original = canon.read_bytes()
+            private = world / "automodpack" / ".private"
+            for path in private.iterdir():
+                path.unlink()
+            shutil.copyfile(restored_cert, private / "cert.crt")
+            shutil.copyfile(restored_key, private / "key.pem")
+            haos_defaults.sync_automodpack_identity(world)
+            self.assertEqual(canon.read_bytes(), original)
+            self.assertTrue((private / "cert.crt").is_symlink())
+            self.assertEqual((private / "cert.crt").resolve(), canon.resolve())
+            self.assertEqual(
+                haos_defaults.automodpack_tls_fingerprint(world),
+                _fingerprint_of(canon),
+            )
+            self.assertNotEqual(_fingerprint_of(restored_cert), _fingerprint_of(canon))
+
+
+def _fingerprint_of(cert: Path) -> str | None:
+    pem = cert.read_text(encoding="utf-8")
+    der = __import__("ssl").PEM_cert_to_DER_cert(pem)
+    digest = __import__("hashlib").sha256(der).hexdigest().upper()
+    return ":".join(digest[i : i + 2] for i in range(0, len(digest), 2))
+
+
+class NonJarUploadTests(unittest.TestCase):
+    def test_guard_refuses_non_jars_and_allows_partials(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            uploaded = root / "worlds" / "World" / "uploaded_mods"
+            uploaded.mkdir(parents=True)
+            os.environ["DATA_DIR"] = str(root / "worlds")
+            os.environ["STATE_DIR"] = str(root / "state")
+            os.environ["MOD_PUBLISHER_DIR"] = str(root / "publisher")
+            Path(os.environ["STATE_DIR"]).mkdir(exist_ok=True)
+            notes = uploaded / "readme.txt"
+            notes.write_text("junk\n", encoding="utf-8")
+            partial = uploaded / "cool_creepers.jar.partial"
+            partial.write_bytes(b"tmp")
+            dot = uploaded / ".prologue.html"
+            dot.write_text("banner\n", encoding="utf-8")
+            fingerprint = uploaded / "AUTOMODPACK-FINGERPRINT.txt"
+            fingerprint.write_text("keep\n", encoding="utf-8")
+            err = io.StringIO()
+            with patch.object(sys, "stderr", err):
+                self.assertEqual(publish_mod.guard_upload(notes), 2)
+                self.assertEqual(publish_mod.guard_upload(uploaded / "shot.png"), 2)
+                self.assertEqual(publish_mod.guard_upload(partial), 0)
+                self.assertEqual(publish_mod.guard_upload(dot), 0)
+            self.assertIn("only .jar", err.getvalue())
+            self.assertIn("readme.txt", err.getvalue())
+            self.assertTrue(notes.is_file())
+            self.assertTrue(partial.is_file())
+
+    def test_after_upload_quarantines_non_jars_and_keeps_fingerprint(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            uploaded = root / "worlds" / "World" / "uploaded_mods"
+            uploaded.mkdir(parents=True)
+            os.environ["DATA_DIR"] = str(root / "worlds")
+            os.environ["STATE_DIR"] = str(root / "state")
+            os.environ["MOD_PUBLISHER_DIR"] = str(root / "publisher")
+            Path(os.environ["STATE_DIR"]).mkdir(exist_ok=True)
+            notes = uploaded / "readme.txt"
+            notes.write_text("junk\n", encoding="utf-8")
+            slipped = uploaded / "notes.md"
+            slipped.write_text("also junk\n", encoding="utf-8")
+            partial = uploaded / "cool.jar.partial"
+            partial.write_bytes(b"tmp")
+            fingerprint = uploaded / "AUTOMODPACK-FINGERPRINT.txt"
+            fingerprint.write_text("keep\n", encoding="utf-8")
+            err = io.StringIO()
+            with patch.object(sys, "stderr", err):
+                self.assertEqual(publish_mod.publish_paths([notes]), 1)
+            self.assertFalse(notes.exists())
+            self.assertFalse(slipped.exists())
+            self.assertTrue(partial.is_file())
+            self.assertEqual(fingerprint.read_text(encoding="utf-8"), "keep\n")
+            quarantine = root / "publisher" / "quarantine"
+            self.assertEqual((quarantine / "readme.txt").read_text(encoding="utf-8"), "junk\n")
+            self.assertEqual((quarantine / "notes.md").read_text(encoding="utf-8"), "also junk\n")
+            self.assertIn("only .jar", err.getvalue())
+            self.assertIn("readme.txt", err.getvalue())
+
+
 if __name__ == "__main__":
     unittest.main()
