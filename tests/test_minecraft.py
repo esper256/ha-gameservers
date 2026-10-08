@@ -28,6 +28,7 @@ from game_server.config import load_config  # noqa: E402
 from game_server.plugin import load_plugin  # noqa: E402
 from game_server.version import SUPERVISOR_VERSION  # noqa: E402
 import haos_defaults  # noqa: E402
+import mod_scan  # noqa: E402
 import publish_mod  # noqa: E402
 
 
@@ -41,6 +42,10 @@ def _write_ha_pin(tmp: Path, version: str = "1.21.1", **extra: object) -> Path:
 
 
 def _jar(path: Path, *, fabric: bool = True, mod_id: str = "cool_creepers") -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists():
+        os.chmod(path, 0o644)
+        path.unlink()
     with zipfile.ZipFile(path, "w") as zf:
         if fabric:
             zf.writestr(
@@ -70,7 +75,34 @@ class MinecraftPluginTests(unittest.TestCase):
         self.assertEqual(plugin.pre_backup_stdin_commands, ["save-all flush"])
         self.assertIsNotNone(plugin.world_catalog)
         self.assertIsNotNone(plugin.world_create)
-        self.assertEqual(plugin.world_create.fields[0].id, "mod_loader")
+        field = plugin.world_create.fields[0]
+        self.assertEqual(field.id, "minecraft_version")
+        self.assertEqual(field.kind, "select")
+        self.assertEqual(field.default, haos_defaults.DEFAULT_MINECRAFT_VERSION)
+        values = [item.value for item in field.options]
+        self.assertEqual(
+            values,
+            [
+                "26.2",
+                "26.1.2",
+                "1.21.11",
+                "1.21.10",
+                "1.21.8",
+                "1.21.5",
+                "1.21.4",
+                "1.21.3",
+                "1.21.1",
+                "1.21",
+                "1.20.6",
+                "1.20.4",
+                "1.20.2",
+                "1.20.1",
+            ],
+        )
+        self.assertTrue(all(isinstance(item, str) for item in values))
+        self.assertIn(field.default, values)
+        self.assertNotIn("mod_loader", PLUGIN.read_text(encoding="utf-8"))
+        self.assertEqual(plugin.world_catalog.caption_json_path, "caption")
         self.assertEqual(plugin.ui_theme.get("accent"), "#5aad32")
         self.assertFalse(hasattr(plugin, "hold_on_crash_loop"))
         self.assertNotIn("hold_on_crash_loop", PLUGIN.read_text(encoding="utf-8"))
@@ -82,8 +114,12 @@ class MinecraftPluginTests(unittest.TestCase):
             )
         )
         self.assertIn("healthz", str(cfg.get("watchdog") or ""))
-        self.assertEqual(cfg.get("options", {}).get("neoforge_version"), "latest")
-        self.assertEqual(cfg.get("options", {}).get("fabric_loader_version"), "latest")
+        self.assertNotIn("minecraft_version", cfg.get("options") or {})
+        self.assertNotIn("neoforge_version", cfg.get("options") or {})
+        self.assertNotIn("fabric_loader_version", cfg.get("options") or {})
+        self.assertNotIn("minecraft_version", cfg.get("schema") or {})
+        self.assertNotIn("neoforge_version", cfg.get("schema") or {})
+        self.assertNotIn("fabric_loader_version", cfg.get("schema") or {})
         self.assertNotIn("white_list", cfg.get("options") or {})
         self.assertNotIn("white_list", cfg.get("schema") or {})
         self.assertNotIn("WHITE_LIST", plugin.env_options)
@@ -274,13 +310,16 @@ class PublishModTests(unittest.TestCase):
             self.assertFalse(jar.exists())
             self.assertTrue(partial.is_file())
 
-    def test_rejects_wrong_loader(self) -> None:
+    def test_publish_allows_a_different_loader(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             worlds = root / "worlds" / "World"
             worlds.mkdir(parents=True)
             (worlds / "profile.json").write_text(
-                json.dumps({"loader": "neoforge"}), encoding="utf-8"
+                json.dumps(
+                    {"loader": "neoforge", "minecraft_version": "1.21.1"}
+                ),
+                encoding="utf-8",
             )
             _write_ha_pin(root)
             publisher = root / "publisher"
@@ -292,8 +331,9 @@ class PublishModTests(unittest.TestCase):
             Path(os.environ["STATE_DIR"]).mkdir(exist_ok=True)
             jar = incoming / "nope.jar"
             _jar(jar, fabric=True)
-            self.assertEqual(publish_mod.publish(jar), 1)
-            self.assertTrue((publisher / "quarantine" / "nope.jar").is_file())
+            self.assertEqual(publish_mod.publish(jar), 0)
+            self.assertTrue((worlds / "uploaded_mods" / "cool_creepers.jar").is_file())
+            self.assertFalse((publisher / "quarantine" / "nope.jar").exists())
 
     def test_rejects_wrong_minecraft_version(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -767,7 +807,12 @@ class PublishModTests(unittest.TestCase):
 
 
 class HaVersionPinTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._seed = patch.object(haos_defaults, "_seed_infrastructure", return_value=None)
+        self._seed.start()
+
     def tearDown(self) -> None:
+        self._seed.stop()
         for key in (
             "DATA_DIR",
             "STATE_DIR",
@@ -793,10 +838,15 @@ class HaVersionPinTests(unittest.TestCase):
         _write_ha_pin(tmp, version)
         Path(os.environ["STATE_DIR"]).mkdir(parents=True, exist_ok=True)
         for ver in ("1.21.1", "1.21.11"):
-            inst = installs / f"neoforge-{ver}"
-            inst.mkdir(parents=True)
-            (inst / "server.jar").write_bytes(b"starter")
-            (inst / "run.sh").write_text("#!/bin/sh\n", encoding="utf-8")
+            for loader in ("neoforge", "vanilla", "fabric"):
+                inst = installs / f"{loader}-{ver}"
+                inst.mkdir(parents=True)
+                (inst / "server.jar").write_bytes(b"starter")
+                (inst / "run.sh").write_text("#!/bin/sh\n", encoding="utf-8")
+                if loader == "fabric":
+                    (inst / ".install.env").write_text(
+                        "SERVER=server.jar\n", encoding="utf-8"
+                    )
         (world / "profile.json").write_text(
             json.dumps({"loader": "neoforge"}),
             encoding="utf-8",
@@ -830,8 +880,6 @@ class HaVersionPinTests(unittest.TestCase):
         payload["publisher_password"] = "secret-pass"
         payload["java_opts"] = "-Xms1G -Xmx2G"
         payload["backup_retention"] = "minimal"
-        payload["neoforge_version"] = "21.1.209"
-        payload["fabric_loader_version"] = "0.16.10"
         with tempfile.TemporaryDirectory() as tmp:
             options = Path(tmp) / "options.json"
             options.write_text(json.dumps(payload), encoding="utf-8")
@@ -850,8 +898,6 @@ class HaVersionPinTests(unittest.TestCase):
                     haos_defaults.env_or_option("server_motd", "A Minecraft Server"),
                     "Pinned MOTD",
                 )
-                self.assertEqual(haos_defaults.neoforge_version(), "21.1.209")
-                self.assertEqual(haos_defaults.fabric_loader_version(), "0.16.10")
                 for leftover in ("ONLINE_MODE", "EULA", "SERVER_MOTD"):
                     os.environ.pop(leftover, None)
                 loaded = load_config()
@@ -901,288 +947,291 @@ class HaVersionPinTests(unittest.TestCase):
             props = (world / "server.properties").read_text(encoding="utf-8")
             self.assertIn("online-mode=false", props)
 
-    def test_prepare_and_run_attempt_the_ha_pin(self) -> None:
+    def test_prepare_pins_legacy_configuration_version(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             world = self._env(Path(tmp), "1.21.11")
-            with patch.object(haos_defaults, "_seed_infrastructure", return_value=None):
-                self.assertEqual(haos_defaults.cmd_prepare_world(), 0)
+            _jar(world / "uploaded_mods" / "cool_creepers.jar", fabric=False)
+            self.assertEqual(haos_defaults.cmd_prepare_world(), 0)
             profile = json.loads((world / "profile.json").read_text(encoding="utf-8"))
             self.assertEqual(profile["loader"], "neoforge")
-            self.assertNotIn("minecraft_version", profile)
-            self.assertFalse((world / "mods").exists())
-            cmd = haos_defaults.prepare_game_command()
-            self.assertIsNotNone(cmd)
-            self.assertEqual(haos_defaults.current_install(world), ("neoforge", "1.21.11"))
-            self.assertTrue((world / "server.jar").exists())
-            self.assertTrue((Path(os.environ["INSTALL_DIR"]) / "neoforge-1.21.1").is_dir())
-            self.assertTrue((Path(os.environ["INSTALL_DIR"]) / "neoforge-1.21.11").is_dir())
-            self.assertEqual((world / "mods" / "cool_creepers.jar").read_bytes(), b"mod")
-
-    def test_prepare_world_reseeds_infra_when_pin_changes(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            world = self._env(Path(tmp), "1.21.1")
-            uploaded = world / "uploaded_mods"
-            (uploaded / "automodpack.jar").write_bytes(b"old-seed")
-            os.chmod(uploaded / "automodpack.jar", 0o444)
-            with patch.object(haos_defaults, "_seed_infrastructure", return_value=None):
-                self.assertEqual(haos_defaults.cmd_prepare_world(), 0)
-            haos_defaults._link_install(world, "neoforge", "1.21.1")
-            self.assertEqual(haos_defaults.current_install(world), ("neoforge", "1.21.1"))
-            _write_ha_pin(Path(tmp), "1.21.11")
-            with patch.object(haos_defaults, "_seed_infrastructure") as seed:
-                self.assertEqual(haos_defaults.cmd_prepare_world(), 0)
-            profile = json.loads((world / "profile.json").read_text(encoding="utf-8"))
-            self.assertEqual(profile["loader"], "neoforge")
-            self.assertFalse((uploaded / "automodpack.jar").exists())
-            seed.assert_called_once()
-            self.assertEqual(seed.call_args.args[1], "neoforge")
-            self.assertEqual(seed.call_args.args[2], "1.21.11")
-
-    def test_options_json_pin_beats_stale_env(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            world = self._env(Path(tmp), "1.21.1")
-            (world / "golden.json").write_text(
-                json.dumps(
-                    {
-                        "loader": "neoforge",
-                        "minecraft_version": "1.21.1",
-                        "stock": True,
-                    }
-                ),
-                encoding="utf-8",
-            )
-            (world / "golden_mods").mkdir()
-            _write_ha_pin(Path(tmp), "1.21.11")
-            os.environ["MINECRAFT_VERSION"] = "1.21.1"
-            self.assertEqual(haos_defaults.minecraft_version(), "1.21.11")
-            cmd = haos_defaults.prepare_game_command()
-            self.assertIsNotNone(cmd)
-            session = json.loads((world / "boot.json").read_text(encoding="utf-8"))
-            self.assertEqual(session.get("mode"), "attempt")
-            self.assertEqual(session.get("minecraft_version"), "1.21.11")
-            self.assertTrue((world / "server.jar").is_symlink() or (world / "server.jar").exists())
-            target = (world / "server.jar").resolve()
-            self.assertIn("neoforge-1.21.11", str(target))
-
-    def test_unreadable_options_fails_loudly(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            options = Path(tmp) / "options.json"
-            options.write_text("{", encoding="utf-8")
-            os.environ["OPTIONS_FILE"] = str(options)
-            os.environ["MINECRAFT_VERSION"] = "1.21.11"
-            with self.assertRaises(haos_defaults.MinecraftPinError) as raised:
-                haos_defaults.minecraft_version()
-            self.assertIn(str(options), str(raised.exception))
-            self.assertNotIn("1.21.11", haos_defaults._normalize_mc_version("{"))
-
-    def test_compose_env_pin_only_when_options_file_absent(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            os.environ["OPTIONS_FILE"] = str(Path(tmp) / "options.json")
-            os.environ["MINECRAFT_VERSION"] = "1.21.11"
-            self.assertEqual(haos_defaults.minecraft_version(), "1.21.11")
-            self.assertIn("MINECRAFT_VERSION", haos_defaults.explain_minecraft_pin())
-
-    def test_missing_pin_fails_loudly(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            os.environ["OPTIONS_FILE"] = str(Path(tmp) / "options.json")
-            os.environ.pop("MINECRAFT_VERSION", None)
-            with self.assertRaises(haos_defaults.MinecraftPinError):
-                haos_defaults.minecraft_version()
-
-    def test_print_version_logs_file_path_and_prints_pin_last(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            options = _write_ha_pin(Path(tmp), "1.21.11")
-            os.environ.pop("MINECRAFT_VERSION", None)
-            from io import StringIO
-
-            captured = StringIO()
-            with patch.object(sys, "stderr", captured):
-                self.assertEqual(haos_defaults.cmd_print_version(), 0)
-            self.assertIn(f"Minecraft pin 1.21.11 from {options}", captured.getvalue())
-
-    def test_missing_pin_tree_runs_install(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            world = self._env(Path(tmp), "1.21.11")
-            shutil.rmtree(Path(os.environ["INSTALL_DIR"]) / "neoforge-1.21.11")
-
-            def _install() -> int:
-                inst = Path(os.environ["INSTALL_DIR"]) / "neoforge-1.21.11"
-                inst.mkdir(parents=True)
-                (inst / "server.jar").write_bytes(b"starter")
-                (inst / "run.sh").write_text("#!/bin/sh\n", encoding="utf-8")
-                return 0
-
-            with patch.object(haos_defaults, "cmd_install", side_effect=_install) as install:
-                cmd = haos_defaults.prepare_game_command()
-            install.assert_called_once()
-            self.assertIsNotNone(cmd)
-            self.assertTrue((world / "server.jar").exists())
-
-    def test_unchanged_pin_keeps_loader(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            world = self._env(Path(tmp), "1.21.1")
-            with patch.object(haos_defaults, "_seed_infrastructure", return_value=None):
-                self.assertEqual(haos_defaults.cmd_prepare_world(), 0)
-            profile = json.loads((world / "profile.json").read_text(encoding="utf-8"))
-            self.assertEqual(profile["loader"], "neoforge")
-            self.assertNotIn("minecraft_version", profile)
-
-    def test_missing_install_fails_clearly(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            self._env(Path(tmp), "1.99.9")
-            with patch.object(haos_defaults, "cmd_install", return_value=0) as install:
-                cmd = haos_defaults.prepare_game_command()
-            install.assert_called_once()
-            self.assertIsNone(cmd)
-
-    def test_loader_pins_default_latest(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            _write_ha_pin(Path(tmp), "1.21.11")
-            self.assertEqual(haos_defaults.neoforge_version(), "latest")
-            self.assertEqual(haos_defaults.fabric_loader_version(), "latest")
-            self.assertEqual(haos_defaults.desired_install_id("neoforge"), "1.21.11")
-            self.assertEqual(haos_defaults.desired_install_id("fabric"), "1.21.11")
-
-    def test_empty_loader_pin_is_latest(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            _write_ha_pin(
-                Path(tmp),
-                "1.21.11",
-                neoforge_version="",
-                fabric_loader_version="",
-            )
-            self.assertEqual(haos_defaults.neoforge_version(), "latest")
-            self.assertEqual(haos_defaults.fabric_loader_version(), "latest")
-
-    def test_invalid_neoforge_pin_fails_loudly(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            _write_ha_pin(Path(tmp), "1.21.11", neoforge_version="../evil")
-            with self.assertRaises(haos_defaults.MinecraftPinError) as raised:
-                haos_defaults.neoforge_version()
-            self.assertIn("neoforge_version", str(raised.exception))
-
-    def test_invalid_fabric_pin_rejects_beta(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            _write_ha_pin(Path(tmp), "1.21.11", fabric_loader_version="beta")
-            with self.assertRaises(haos_defaults.MinecraftPinError):
-                haos_defaults.fabric_loader_version()
-
-    def test_helper_argv_latest_beta_and_exact(self) -> None:
-        fabric = Path("/data/installs/fabric-1.21.11")
-        latest_f = haos_defaults.fabric_install_args(
-            fabric, mc_version="1.21.11", pin="latest"
-        )
-        self.assertTrue(all(not a.startswith("--loader-version=") for a in latest_f))
-        exact_f = haos_defaults.fabric_install_args(
-            fabric, mc_version="1.21.11", pin="0.16.10"
-        )
-        self.assertIn("--loader-version=0.16.10", exact_f)
-        neo = Path("/data/installs/neoforge-1.21.11-beta")
-        self.assertIn(
-            "--neoforge-version=beta",
-            haos_defaults.neoforge_install_args(
-                neo, mc_version="1.21.11", pin="beta"
-            ),
-        )
-        self.assertIn(
-            "--neoforge-version=21.11.10-beta",
-            haos_defaults.neoforge_install_args(
-                neo, mc_version="1.21.11", pin="21.11.10-beta"
-            ),
-        )
-
-    def test_cmd_install_skips_when_marker_matches_pins(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            self._env(Path(tmp), "1.21.11")
-            _write_ha_pin(Path(tmp), "1.21.11", neoforge_version="beta")
-            root = Path(os.environ["INSTALL_DIR"])
-            neo = root / "neoforge-1.21.11-beta"
-            fabric = root / "fabric-1.21.11"
-            neo.mkdir(parents=True)
-            fabric.mkdir(parents=True)
-            (neo / "server.jar").write_bytes(b"starter")
-            (neo / ".install.env").write_text("SERVER=server.jar\n", encoding="utf-8")
-            (fabric / ".install.env").write_text("SERVER=run.sh\n", encoding="utf-8")
-            (root / ".loaders_ready").write_text(
-                "1.21.11 fabric=latest neoforge=beta\n", encoding="utf-8"
-            )
-            with patch.object(haos_defaults, "_run_helper") as helper:
-                self.assertEqual(haos_defaults.cmd_install(), 0)
-            helper.assert_not_called()
-
-    def test_legacy_marker_counts_as_ready_when_pins_are_latest(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            self._env(Path(tmp), "1.21.11")
-            root = Path(os.environ["INSTALL_DIR"])
-            fabric = root / "fabric-1.21.11"
-            fabric.mkdir(parents=True)
-            (fabric / ".install.env").write_text("SERVER=x\n", encoding="utf-8")
-            (root / "neoforge-1.21.11" / ".install.env").write_text(
-                "SERVER=x\n", encoding="utf-8"
-            )
-            (root / ".loaders_ready").write_text("1.21.11\n", encoding="utf-8")
-            with patch.object(haos_defaults, "_run_helper") as helper:
-                self.assertEqual(haos_defaults.cmd_install(), 0)
-            helper.assert_not_called()
-
-    def test_cmd_install_reruns_when_neoforge_pin_changes(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            self._env(Path(tmp), "1.21.11")
-            _write_ha_pin(Path(tmp), "1.21.11", neoforge_version="beta")
-            root = Path(os.environ["INSTALL_DIR"])
-            fabric = root / "fabric-1.21.11"
-            fabric.mkdir(parents=True)
-            (fabric / ".install.env").write_text("SERVER=x\n", encoding="utf-8")
-            (root / ".loaders_ready").write_text("1.21.11\n", encoding="utf-8")
-            calls: list[list[str]] = []
-
-            def _capture(args: list[str]) -> None:
-                calls.append(list(args))
-                dest = None
-                for item in args:
-                    if item.startswith("--output-directory="):
-                        dest = Path(item.split("=", 1)[1])
-                assert dest is not None
-                dest.mkdir(parents=True, exist_ok=True)
-                (dest / ".install.env").write_text(
-                    "SERVER=server.jar\n", encoding="utf-8"
-                )
-                (dest / "server.jar").write_bytes(b"starter")
-                (dest / "run.sh").write_text("#!/bin/sh\n", encoding="utf-8")
-
-            with patch.object(haos_defaults, "_run_helper", side_effect=_capture):
-                self.assertEqual(haos_defaults.cmd_install(), 0)
-            neo = [c for c in calls if c[0] == "install-neoforge"][0]
-            self.assertIn("--neoforge-version=beta", neo)
-            self.assertTrue((root / "neoforge-1.21.11-beta").is_dir())
-            self.assertEqual(
-                (root / ".loaders_ready").read_text(encoding="utf-8").strip(),
-                "1.21.11 fabric=latest neoforge=beta",
-            )
-
-    def test_neoforge_beta_restages_to_new_tree(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            world = self._env(Path(tmp), "1.21.11")
+            self.assertEqual(profile["minecraft_version"], "1.21.11")
+            self.assertEqual(profile["caption"], "1.21.11 · NeoForge")
             cmd = haos_defaults.prepare_game_command()
             self.assertIsNotNone(cmd)
             self.assertEqual(
                 haos_defaults.current_install(world), ("neoforge", "1.21.11")
             )
-            _write_ha_pin(Path(tmp), "1.21.11", neoforge_version="beta")
-            beta = Path(os.environ["INSTALL_DIR"]) / "neoforge-1.21.11-beta"
-            beta.mkdir(parents=True)
-            (beta / "server.jar").write_bytes(b"beta")
-            (beta / "run.sh").write_text("#!/bin/sh\n", encoding="utf-8")
+
+    def test_addon_update_does_not_change_a_world_version(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            world = self._env(Path(tmp), "1.21.1")
+            (world / "profile.json").write_text(
+                json.dumps(
+                    {
+                        "loader": "neoforge",
+                        "minecraft_version": "1.21.1",
+                        "caption": "1.21.1 · NeoForge",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            _jar(world / "uploaded_mods" / "cool_creepers.jar", fabric=False)
+            _write_ha_pin(Path(tmp), "1.21.11")
+            os.environ["MINECRAFT_VERSION"] = "26.2"
+            self.assertEqual(haos_defaults.cmd_prepare_world(), 0)
+            profile = json.loads((world / "profile.json").read_text(encoding="utf-8"))
+            self.assertEqual(profile["minecraft_version"], "1.21.1")
+            self.assertEqual(profile["loader"], "neoforge")
             cmd = haos_defaults.prepare_game_command()
             self.assertIsNotNone(cmd)
             self.assertEqual(
-                haos_defaults.current_install(world), ("neoforge", "1.21.11-beta")
-            )
-            self.assertIn(
-                "neoforge-1.21.11-beta", str((world / "server.jar").resolve())
+                haos_defaults.current_install(world), ("neoforge", "1.21.1")
             )
 
-    def test_parse_install_ref_keeps_loader_pin(self) -> None:
+    def test_loader_switch_clears_and_reseeds(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            world = self._env(Path(tmp), "1.21.1")
+            uploaded = world / "uploaded_mods"
+            _jar(uploaded / "cool_creepers.jar", fabric=False)
+            (uploaded / "automodpack.jar").write_bytes(b"old-seed")
+            os.chmod(uploaded / "automodpack.jar", 0o444)
+            self.assertEqual(haos_defaults.cmd_prepare_world(), 0)
+            _jar(uploaded / "cool_creepers.jar", fabric=True)
+            with patch.object(haos_defaults, "_seed_infrastructure") as seed:
+                self.assertEqual(haos_defaults.cmd_prepare_world(), 0)
+            profile = json.loads((world / "profile.json").read_text(encoding="utf-8"))
+            self.assertEqual(profile["minecraft_version"], "1.21.1")
+            self.assertEqual(profile["loader"], "fabric")
+            self.assertEqual(profile["caption"], "1.21.1 · Fabric")
+            self.assertFalse((uploaded / "automodpack.jar").exists())
+            seed.assert_called_once()
+            self.assertEqual(seed.call_args.args[1], "fabric")
+            self.assertEqual(seed.call_args.args[2], "1.21.1")
+
+    def test_existing_install_beats_a_newer_configuration_pin(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            world = self._env(Path(tmp), "1.21.1")
+            (world / "profile.json").write_text("{}", encoding="utf-8")
+            _jar(world / "uploaded_mods" / "cool_creepers.jar", fabric=False)
+            haos_defaults._link_install(world, "neoforge", "1.21.1")
+            _write_ha_pin(Path(tmp), "1.21.11")
+            os.environ["MINECRAFT_VERSION"] = "26.2"
+            self.assertEqual(haos_defaults.resolve_world_version(world), "1.21.1")
+            profile = json.loads((world / "profile.json").read_text(encoding="utf-8"))
+            self.assertEqual(profile["minecraft_version"], "1.21.1")
+            _write_ha_pin(Path(tmp), "26.2")
+            self.assertEqual(haos_defaults.resolve_world_version(world), "1.21.1")
+
+    def test_legacy_options_pin_used_only_without_install(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            world = self._env(Path(tmp), "1.21.1")
+            (world / "profile.json").unlink()
+            _write_ha_pin(Path(tmp), "1.21.11")
+            os.environ["MINECRAFT_VERSION"] = "1.21.1"
+            self.assertEqual(haos_defaults.resolve_world_version(world), "1.21.11")
+
+    def test_compose_env_used_when_options_have_no_version(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            world = Path(tmp) / "worlds" / "World"
+            world.mkdir(parents=True)
+            os.environ["DATA_DIR"] = str(Path(tmp) / "worlds")
+            os.environ["OPTIONS_FILE"] = str(Path(tmp) / "options.json")
+            os.environ["MINECRAFT_VERSION"] = "1.21.11"
+            self.assertEqual(haos_defaults.resolve_world_version(world), "1.21.11")
+
+    def test_new_world_without_a_pin_uses_the_picker_default(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            world = Path(tmp) / "worlds" / "World"
+            world.mkdir(parents=True)
+            os.environ["DATA_DIR"] = str(Path(tmp) / "worlds")
+            os.environ["OPTIONS_FILE"] = str(Path(tmp) / "missing-options.json")
+            os.environ.pop("MINECRAFT_VERSION", None)
+            self.assertEqual(
+                haos_defaults.resolve_world_version(world),
+                haos_defaults.DEFAULT_MINECRAFT_VERSION,
+            )
+
+    def test_world_create_version_is_stored(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            world = self._env(Path(tmp), "1.21.1")
+            (world / "profile.json").unlink()
+            (world / "world_create.json").write_text(
+                json.dumps({"minecraft_version": "26.2"}),
+                encoding="utf-8",
+            )
+            _jar(world / "uploaded_mods" / "cool_creepers.jar", fabric=False)
+            # 26.2 tree is not in _env; detection still records the pin before boot.
+            self.assertEqual(haos_defaults.cmd_prepare_world(), 0)
+            profile = json.loads((world / "profile.json").read_text(encoding="utf-8"))
+            self.assertEqual(profile["minecraft_version"], "26.2")
+            self.assertFalse((world / "world_create.json").exists())
+
+    def test_unreadable_options_fail_when_migration_needs_them(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            world = Path(tmp) / "worlds" / "World"
+            world.mkdir(parents=True)
+            options = Path(tmp) / "options.json"
+            options.write_text("{", encoding="utf-8")
+            os.environ["DATA_DIR"] = str(Path(tmp) / "worlds")
+            os.environ["OPTIONS_FILE"] = str(options)
+            os.environ["MINECRAFT_VERSION"] = "1.21.11"
+            with self.assertRaises(haos_defaults.MinecraftPinError) as raised:
+                haos_defaults.resolve_world_version(world)
+            self.assertIn(str(options), str(raised.exception))
+
+    def test_stored_version_ignores_a_broken_options_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            world = Path(tmp) / "worlds" / "World"
+            world.mkdir(parents=True)
+            (world / "profile.json").write_text(
+                json.dumps({"minecraft_version": "1.21.1"}),
+                encoding="utf-8",
+            )
+            options = Path(tmp) / "options.json"
+            options.write_text("{", encoding="utf-8")
+            os.environ["DATA_DIR"] = str(Path(tmp) / "worlds")
+            os.environ["OPTIONS_FILE"] = str(options)
+            self.assertEqual(haos_defaults.resolve_world_version(world), "1.21.1")
+
+    def test_print_version_is_a_stable_package_marker(self) -> None:
+        from io import StringIO
+
+        captured = StringIO()
+        stdout = StringIO()
+        with patch.object(sys, "stderr", captured), patch.object(sys, "stdout", stdout):
+            self.assertEqual(haos_defaults.cmd_print_version(), 0)
+        self.assertIn("pinned on each world", captured.getvalue())
+        self.assertEqual(stdout.getvalue().strip(), haos_defaults.PACKAGE_VERSION)
+
+    def test_cmd_install_only_writes_the_marker(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            self._env(Path(tmp), "1.21.11")
+            root = Path(os.environ["INSTALL_DIR"])
+            with patch.object(haos_defaults, "_run_helper") as helper:
+                self.assertEqual(haos_defaults.cmd_install(), 0)
+            helper.assert_not_called()
+            self.assertEqual(
+                (root / ".loaders_ready").read_text(encoding="utf-8").strip(),
+                haos_defaults.PACKAGE_VERSION,
+            )
+
+    def test_missing_tree_runs_loader_install(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            world = self._env(Path(tmp), "1.21.11")
+            _jar(world / "uploaded_mods" / "cool_creepers.jar", fabric=False)
+            shutil.rmtree(Path(os.environ["INSTALL_DIR"]) / "neoforge-1.21.11")
+
+            def _install(loader: str, version: str) -> bool:
+                inst = Path(os.environ["INSTALL_DIR"]) / f"{loader}-{version}"
+                inst.mkdir(parents=True)
+                (inst / "server.jar").write_bytes(b"starter")
+                (inst / "run.sh").write_text("#!/bin/sh\n", encoding="utf-8")
+                return True
+
+            with patch.object(
+                haos_defaults, "ensure_loader_install", side_effect=_install
+            ) as install:
+                cmd = haos_defaults.prepare_game_command()
+            install.assert_called_once_with("neoforge", "1.21.11")
+            self.assertIsNotNone(cmd)
+            self.assertTrue((world / "server.jar").exists())
+
+    def test_missing_install_fails_clearly(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            world = self._env(Path(tmp), "1.21.1")
+            _jar(world / "uploaded_mods" / "cool_creepers.jar", fabric=False)
+            shutil.rmtree(Path(os.environ["INSTALL_DIR"]) / "neoforge-1.21.1")
+            with patch.object(haos_defaults, "ensure_loader_install", return_value=False):
+                cmd = haos_defaults.prepare_game_command()
+            self.assertIsNone(cmd)
+
+    def test_helper_argv_is_latest_loader(self) -> None:
+        fabric = Path("/data/installs/fabric-1.21.11")
+        fabric_args = haos_defaults.fabric_install_args(fabric, mc_version="1.21.11")
+        self.assertTrue(all(not a.startswith("--loader-version=") for a in fabric_args))
+        self.assertIn("--minecraft-version=1.21.11", fabric_args)
+        neo = haos_defaults.neoforge_install_args(
+            Path("/data/installs/neoforge-1.21.11"), mc_version="1.21.11"
+        )
+        self.assertIn("--neoforge-version=latest", neo)
+
+    def test_loader_switch_on_next_boot(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            world = self._env(Path(tmp), "1.21.1")
+            uploaded = world / "uploaded_mods"
+            _jar(uploaded / "cool_creepers.jar", fabric=False)
+            self.assertIsNotNone(haos_defaults.prepare_game_command())
+            self.assertEqual(
+                haos_defaults.current_install(world), ("neoforge", "1.21.1")
+            )
+            uploaded.joinpath("cool_creepers.jar").unlink()
+            _jar(uploaded / "cool_creepers.jar", fabric=True)
+            self.assertIsNotNone(haos_defaults.prepare_game_command())
+            self.assertEqual(
+                haos_defaults.current_install(world), ("fabric", "1.21.1")
+            )
+            profile = json.loads((world / "profile.json").read_text(encoding="utf-8"))
+            self.assertEqual(profile["minecraft_version"], "1.21.1")
+            self.assertEqual(profile["loader"], "fabric")
+
+    def test_empty_folder_is_vanilla_and_ignores_injected_jars(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            world = self._env(Path(tmp), "1.21.1")
+            uploaded = world / "uploaded_mods"
+            (uploaded / "cool_creepers.jar").unlink()
+            (uploaded / "automodpack.jar").write_bytes(b"seed")
+            (uploaded / "fabric-api.jar").write_bytes(b"api")
+            (uploaded / "AUTOMODPACK-FINGERPRINT.txt").write_text("fp\n", encoding="utf-8")
+            (uploaded / "libraries.jar").write_bytes(b"not-a-zip")
+            cmd = haos_defaults.prepare_game_command()
+            self.assertIsNotNone(cmd)
+            self.assertEqual(haos_defaults.current_install(world), ("vanilla", "1.21.1"))
+            profile = json.loads((world / "profile.json").read_text(encoding="utf-8"))
+            self.assertEqual(profile["loader"], "vanilla")
+            self.assertEqual(profile["caption"], "1.21.1 · Vanilla")
+            self.assertFalse((uploaded / "automodpack.jar").exists())
+
+    def test_mixed_mods_refuse_to_start(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            world = self._env(Path(tmp), "1.21.1")
+            uploaded = world / "uploaded_mods"
+            (uploaded / "cool_creepers.jar").unlink()
+            _jar(uploaded / "fabric_mod.jar", fabric=True, mod_id="fabric_mod")
+            _jar(uploaded / "neo_mod.jar", fabric=False, mod_id="neo_mod")
+            buf = io.StringIO()
+            with patch.object(sys, "stderr", buf):
+                cmd = haos_defaults.prepare_game_command()
+            self.assertIsNone(cmd)
+            text = buf.getvalue()
+            self.assertIn("fabric_mod.jar", text)
+            self.assertIn("neo_mod.jar", text)
+            self.assertIn("Fabric and NeoForge", text)
+            profile = json.loads((world / "profile.json").read_text(encoding="utf-8"))
+            self.assertEqual(profile["minecraft_version"], "1.21.1")
+
+    def test_incompatible_mod_refuses_to_start(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            world = self._env(Path(tmp), "1.21.1")
+            uploaded = world / "uploaded_mods"
+            (uploaded / "cool_creepers.jar").unlink()
+            jar = uploaded / "jade.jar"
+            with zipfile.ZipFile(jar, "w") as zf:
+                zf.writestr(
+                    "META-INF/neoforge.mods.toml",
+                    'modId="jade"\n'
+                    '[[dependencies.jade]]\nmodId="neoforge"\nversionRange="[21,)"\n'
+                    '[[dependencies.jade]]\nmodId="minecraft"\n'
+                    'versionRange="[1.21.11,1.22)"\n',
+                )
+            buf = io.StringIO()
+            with patch.object(sys, "stderr", buf):
+                self.assertIsNone(haos_defaults.prepare_game_command())
+            text = buf.getvalue()
+            self.assertIn("jade.jar", text)
+            self.assertIn("1.21.1", text)
+            self.assertIn("[1.21.11,1.22)", text)
+
+    def test_parse_install_ref_keeps_legacy_loader_pin(self) -> None:
         self.assertEqual(
             haos_defaults.parse_install_ref(Path("/data/installs/neoforge-1.21.11")),
             ("neoforge", "1.21.11"),
@@ -1194,16 +1243,12 @@ class HaVersionPinTests(unittest.TestCase):
             ("neoforge", "1.21.11-beta"),
         )
         self.assertEqual(
-            haos_defaults.parse_install_ref(
-                Path("/data/installs/neoforge-1.21.11-21.11.10-beta")
-            ),
-            ("neoforge", "1.21.11-21.11.10-beta"),
+            haos_defaults.parse_install_ref(Path("/data/installs/vanilla-1.21.1")),
+            ("vanilla", "1.21.1"),
         )
         self.assertEqual(
-            haos_defaults.parse_install_ref(
-                Path("/data/installs/fabric-1.21.1-0.16.10")
-            ),
-            ("fabric", "1.21.1-0.16.10"),
+            haos_defaults.parse_install_ref(Path("/data/installs/vanilla-26.2")),
+            ("vanilla", "26.2"),
         )
 
 
@@ -1467,10 +1512,15 @@ class AutoModpackFingerprintTests(unittest.TestCase):
         os.environ["JAVA_OPTS"] = "-Xms32M"
         _write_ha_pin(tmp, version)
         Path(os.environ["STATE_DIR"]).mkdir(parents=True, exist_ok=True)
-        inst = installs / f"neoforge-{version}"
-        inst.mkdir(parents=True)
-        (inst / "server.jar").write_bytes(b"starter")
-        (inst / "run.sh").write_text("#!/bin/sh\n", encoding="utf-8")
+        for loader in ("neoforge", "vanilla", "fabric"):
+            inst = installs / f"{loader}-{version}"
+            inst.mkdir(parents=True)
+            (inst / "server.jar").write_bytes(b"starter")
+            (inst / "run.sh").write_text("#!/bin/sh\n", encoding="utf-8")
+            if loader == "fabric":
+                (inst / ".install.env").write_text(
+                    "SERVER=server.jar\n", encoding="utf-8"
+                )
         (world / "profile.json").write_text(
             json.dumps({"loader": "neoforge"}),
             encoding="utf-8",
@@ -1480,6 +1530,416 @@ class AutoModpackFingerprintTests(unittest.TestCase):
         (uploaded / "cool_creepers.jar").write_bytes(b"mod")
         os.chmod(uploaded / "cool_creepers.jar", 0o444)
         return world
+
+
+def _fabric_jar(
+    path: Path,
+    *,
+    mod_id: str = "cool_creepers",
+    minecraft: str | list[str] | None = None,
+    quilt: bool = False,
+    neoforge: bool = False,
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    depends: dict[str, object] = {}
+    if minecraft is not None:
+        depends["minecraft"] = minecraft
+    with zipfile.ZipFile(path, "w") as zf:
+        zf.writestr(
+            "fabric.mod.json",
+            json.dumps(
+                {
+                    "id": mod_id,
+                    "version": "1.0.0",
+                    "name": "Cool Creepers",
+                    "depends": depends,
+                }
+            ),
+        )
+        if quilt:
+            zf.writestr("quilt.mod.json", "{}")
+        if neoforge:
+            zf.writestr(
+                "META-INF/neoforge.mods.toml",
+                f'modId="{mod_id}"\n',
+            )
+
+
+def _toml_jar(path: Path, body: str, *, name: str = "META-INF/mods.toml") -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(path, "w") as zf:
+        zf.writestr(name, body)
+
+
+class ModScanTests(unittest.TestCase):
+    def test_fabric_neoforge_empty_and_library(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp)
+            self.assertEqual(mod_scan.scan_mods(folder, "1.21.1").loader, "vanilla")
+            _fabric_jar(folder / "cool.jar")
+            fabric = mod_scan.scan_mods(folder, "1.21.1")
+            self.assertEqual(fabric.loader, "fabric")
+            self.assertEqual(fabric.errors, [])
+            (folder / "cool.jar").unlink()
+            _toml_jar(
+                folder / "neo.jar",
+                'modId="jade"\n[[dependencies.jade]]\nmodId="neoforge"\n'
+                'versionRange="[21,)"\n[[dependencies.jade]]\nmodId="minecraft"\n'
+                'versionRange="[1.21.1,1.22)"\n',
+                name="META-INF/neoforge.mods.toml",
+            )
+            neo = mod_scan.scan_mods(folder, "1.21.1")
+            self.assertEqual(neo.loader, "neoforge")
+            (folder / "neo.jar").unlink()
+            (folder / "libraries.jar").write_bytes(b"not-a-zip")
+            with zipfile.ZipFile(folder / "api.jar", "w") as zf:
+                zf.writestr("com/example/Lib.class", b"\x00")
+            empty = mod_scan.scan_mods(folder, "1.21.1")
+            self.assertEqual(empty.loader, "vanilla")
+            self.assertEqual(empty.errors, [])
+            self.assertTrue(any("libraries.jar" in item for item in empty.warnings))
+            self.assertTrue(any("api.jar" in item for item in empty.warnings))
+
+    def test_injected_jars_do_not_choose_a_loader(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp)
+            (folder / "automodpack-mc1.21.1-fabric-4.0.6.jar").write_bytes(b"seed")
+            (folder / "fabric-api.jar").write_bytes(b"api")
+            (folder / "AUTOMODPACK-FINGERPRINT.txt").write_text("fp\n", encoding="utf-8")
+            _fabric_jar(folder / "hidden.jar", mod_id="automodpack")
+            self.assertEqual(mod_scan.scan_mods(folder, "1.21.1").loader, "vanilla")
+
+    def test_mixed_loaders_name_both_jars(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp)
+            _fabric_jar(folder / "fabric_mod.jar", mod_id="fabric_mod")
+            _toml_jar(
+                folder / "neo_mod.jar",
+                'modId="neo_mod"\n',
+                name="META-INF/neoforge.mods.toml",
+            )
+            scan = mod_scan.scan_mods(folder, "1.21.1")
+            self.assertEqual(scan.loader, "")
+            text = "\n".join(scan.errors)
+            self.assertIn("fabric_mod.jar", text)
+            self.assertIn("neo_mod.jar", text)
+            self.assertIn("Fabric and NeoForge", text)
+
+    def test_legacy_mods_toml_forge_neoforge_and_ambiguous(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp)
+            _toml_jar(
+                folder / "old_neo.jar",
+                'modId="old_neo"\n[[dependencies.old_neo]]\nmodId="neoforge"\n'
+                'versionRange="[21,)"\n',
+            )
+            self.assertEqual(mod_scan.scan_mods(folder, "1.21.1").loader, "neoforge")
+            (folder / "old_neo.jar").unlink()
+            _toml_jar(
+                folder / "forge_mod.jar",
+                'modId="forge_mod"\n[[dependencies.forge_mod]]\nmodId="forge"\n'
+                'versionRange="[47,)"\n',
+            )
+            forge = mod_scan.scan_mods(folder, "1.21.1")
+            self.assertEqual(forge.loader, "")
+            self.assertIn("Forge", "\n".join(forge.errors))
+            (folder / "forge_mod.jar").unlink()
+            _toml_jar(folder / "mystery.jar", 'modId="mystery"\n')
+            mystery = mod_scan.scan_mods(folder, "1.21.1")
+            self.assertEqual(mystery.loader, "vanilla")
+            self.assertEqual(mystery.errors, [])
+            self.assertTrue(any("mystery.jar" in item for item in mystery.warnings))
+
+    def test_quilt_only_is_refused_and_fabric_plus_quilt_is_fabric(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp)
+            with zipfile.ZipFile(folder / "quilt_only.jar", "w") as zf:
+                zf.writestr("quilt.mod.json", '{"id":"quilt_only"}')
+            quilt = mod_scan.scan_mods(folder, "1.21.1")
+            self.assertEqual(quilt.loader, "")
+            self.assertIn("Quilt", "\n".join(quilt.errors))
+            (folder / "quilt_only.jar").unlink()
+            _fabric_jar(folder / "both.jar", quilt=True)
+            self.assertEqual(mod_scan.scan_mods(folder, "1.21.1").loader, "fabric")
+
+    def test_one_jar_with_both_metadata_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp)
+            _fabric_jar(folder / "both.jar", neoforge=True)
+            scan = mod_scan.scan_mods(folder, "1.21.1")
+            self.assertEqual(scan.loader, "")
+            self.assertIn("both.jar", "\n".join(scan.errors))
+
+    def test_fabric_and_neoforge_version_ranges(self) -> None:
+        self.assertTrue(mod_scan.fabric_predicate_matches(">=1.21 <1.22", "1.21.1"))
+        self.assertFalse(mod_scan.fabric_predicate_matches(">=1.21 <1.22", "1.22"))
+        self.assertTrue(mod_scan.fabric_predicate_matches("1.21.x", "1.21.11"))
+        self.assertFalse(mod_scan.fabric_predicate_matches("1.21.x", "1.20.1"))
+        self.assertTrue(mod_scan.fabric_predicate_matches("*", "26.2"))
+        self.assertTrue(mod_scan.fabric_predicate_matches("", "1.21.1"))
+        self.assertIsNone(mod_scan.fabric_predicate_matches("^1.21.1", "1.21.1"))
+        self.assertIsNone(mod_scan.fabric_predicate_matches("not-a-range", "1.21.1"))
+        self.assertTrue(mod_scan.fabric_predicate_matches("1.21.11 || 1.21.1", "1.21.1"))
+        self.assertTrue(mod_scan.maven_range_matches("[1.21,1.22)", "1.21.11"))
+        self.assertFalse(mod_scan.maven_range_matches("[1.21,1.22)", "1.22"))
+        self.assertTrue(mod_scan.maven_range_matches("[1.21.11]", "1.21.11"))
+        self.assertFalse(mod_scan.maven_range_matches("[1.21.11]", "1.21.1"))
+        self.assertTrue(mod_scan.maven_range_matches("[1.21.1,)", "1.21.10"))
+        self.assertEqual(mod_scan._cmp_versions("1.21.10", "1.21.9"), 1)
+        self.assertEqual(mod_scan._cmp_versions("1.21", "1.21.0"), 0)
+        self.assertIsNone(mod_scan.maven_range_matches("garbage", "1.21.1"))
+
+    def test_incompatible_range_blocks_and_unparseable_does_not(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp)
+            _fabric_jar(folder / "future.jar", minecraft=">=1.21.11")
+            blocked = mod_scan.scan_mods(folder, "1.21.1")
+            self.assertEqual(blocked.loader, "")
+            text = "\n".join(blocked.errors)
+            self.assertIn("future.jar", text)
+            self.assertIn("cool_creepers", text)
+            self.assertIn(">=1.21.11", text)
+            (folder / "future.jar").unlink()
+            _fabric_jar(folder / "caret.jar", minecraft="^1.21.1")
+            warned = mod_scan.scan_mods(folder, "1.21.1")
+            self.assertEqual(warned.loader, "fabric")
+            self.assertEqual(warned.errors, [])
+            self.assertTrue(any("caret.jar" in item for item in warned.warnings))
+            (folder / "caret.jar").unlink()
+            _fabric_jar(folder / "open.jar")
+            self.assertEqual(mod_scan.scan_mods(folder, "1.21.1").loader, "fabric")
+
+
+def _openssl_pair(directory: Path, name: str) -> tuple[Path, Path]:
+    cert = directory / f"{name}.crt"
+    key = directory / f"{name}.key"
+    subprocess.check_call(
+        [
+            "openssl",
+            "req",
+            "-x509",
+            "-newkey",
+            "rsa:2048",
+            "-nodes",
+            "-keyout",
+            str(key),
+            "-out",
+            str(cert),
+            "-days",
+            "30",
+            "-subj",
+            f"/CN={name}",
+        ],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    return cert, key
+
+
+def _plant_identity(world: Path, cert: Path, key: Path) -> None:
+    private = world / "automodpack" / ".private"
+    private.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(cert, private / "cert.crt")
+    shutil.copyfile(key, private / "key.pem")
+
+
+class SharedAutoModpackCertTests(unittest.TestCase):
+    def _layout(self, tmp: Path) -> tuple[Path, Path]:
+        worlds = tmp / "worlds"
+        worlds.mkdir()
+        state = tmp / "state"
+        state.mkdir()
+        os.environ["DATA_DIR"] = str(worlds)
+        os.environ["STATE_DIR"] = str(state)
+        os.environ.pop("AUTOMODPACK_IDENTITY_DIR", None)
+        return worlds, state
+
+    def _activate(self, state: Path, name: str) -> None:
+        (state / "active_world.json").write_text(
+            json.dumps({"value": name}), encoding="utf-8"
+        )
+
+    def test_two_worlds_share_one_cert_and_fingerprint(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            worlds, state = self._layout(root)
+            cert, key = _openssl_pair(root, "trusted")
+            first = worlds / "World"
+            second = worlds / "Creative"
+            first.mkdir()
+            second.mkdir()
+            _plant_identity(first, cert, key)
+            (first / "boot.json").write_text("{}\n", encoding="utf-8")
+            self._activate(state, "World")
+            haos_defaults.sync_automodpack_identity(first)
+            haos_defaults.sync_automodpack_identity(second)
+            canon = root / "automodpack-identity"
+            self.assertEqual((canon / "cert.crt").read_bytes(), cert.read_bytes())
+            self.assertEqual((canon / "key.pem").stat().st_mode & 0o777, 0o600)
+            for world in (first, second):
+                private = world / "automodpack" / ".private"
+                self.assertTrue((private / "cert.crt").is_symlink())
+                self.assertTrue((private / "key.pem").is_symlink())
+                self.assertEqual((private / "cert.crt").resolve(), (canon / "cert.crt").resolve())
+                self.assertEqual((private / "key.pem").resolve(), (canon / "key.pem").resolve())
+                text_path = haos_defaults.write_automodpack_fingerprint_file(world)
+                assert text_path is not None
+                self.assertTrue(text_path.is_file())
+            left = (first / "uploaded_mods" / "AUTOMODPACK-FINGERPRINT.txt").read_text(
+                encoding="utf-8"
+            )
+            right = (second / "uploaded_mods" / "AUTOMODPACK-FINGERPRINT.txt").read_text(
+                encoding="utf-8"
+            )
+            self.assertEqual(left, right)
+            self.assertIn(haos_defaults.automodpack_tls_fingerprint(first) or "", left)
+            uploaded_names = {path.name for path in (first / "uploaded_mods").iterdir()}
+            self.assertNotIn("key.pem", uploaded_names)
+            self.assertNotIn("cert.crt", uploaded_names)
+            self.assertFalse((first / "uploaded_mods" / "key.pem").exists())
+
+    def test_migration_adopts_the_active_world_cert(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            worlds, state = self._layout(root)
+            trusted_cert, trusted_key = _openssl_pair(root, "trusted")
+            other_cert, other_key = _openssl_pair(root, "other")
+            active = worlds / "Survival"
+            newer = worlds / "Newer"
+            active.mkdir()
+            newer.mkdir()
+            _plant_identity(active, trusted_cert, trusted_key)
+            _plant_identity(newer, other_cert, other_key)
+            now = 1_700_000_000
+            (active / "boot.json").write_text("{}\n", encoding="utf-8")
+            (newer / "boot.json").write_text("{}\n", encoding="utf-8")
+            os.utime(active / "boot.json", (now, now))
+            os.utime(newer / "boot.json", (now + 5000, now + 5000))
+            self._activate(state, "Survival")
+            empty = worlds / "Empty"
+            empty.mkdir()
+            haos_defaults.sync_automodpack_identity(empty)
+            canon = root / "automodpack-identity" / "cert.crt"
+            self.assertEqual(canon.read_bytes(), trusted_cert.read_bytes())
+            self.assertNotEqual(canon.read_bytes(), other_cert.read_bytes())
+
+    def test_migration_uses_the_most_recent_world_when_active_has_no_cert(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            worlds, state = self._layout(root)
+            old_cert, old_key = _openssl_pair(root, "old")
+            new_cert, new_key = _openssl_pair(root, "new")
+            old = worlds / "Old"
+            new = worlds / "New"
+            old.mkdir()
+            new.mkdir()
+            _plant_identity(old, old_cert, old_key)
+            _plant_identity(new, new_cert, new_key)
+            now = 1_700_000_000
+            (old / "boot.json").write_text("{}\n", encoding="utf-8")
+            (new / "boot.json").write_text("{}\n", encoding="utf-8")
+            os.utime(old / "boot.json", (now, now))
+            os.utime(new / "boot.json", (now + 5000, now + 5000))
+            self._activate(state, "Empty")
+            (worlds / "Empty").mkdir()
+            haos_defaults.sync_automodpack_identity(worlds / "Empty")
+            canon = root / "automodpack-identity" / "cert.crt"
+            self.assertEqual(canon.read_bytes(), new_cert.read_bytes())
+
+    def test_restored_world_cert_does_not_replace_the_shared_one(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            worlds, state = self._layout(root)
+            trusted_cert, trusted_key = _openssl_pair(root, "trusted")
+            restored_cert, restored_key = _openssl_pair(root, "restored")
+            world = worlds / "World"
+            world.mkdir()
+            _plant_identity(world, trusted_cert, trusted_key)
+            self._activate(state, "World")
+            haos_defaults.sync_automodpack_identity(world)
+            canon = root / "automodpack-identity" / "cert.crt"
+            original = canon.read_bytes()
+            private = world / "automodpack" / ".private"
+            for path in private.iterdir():
+                path.unlink()
+            shutil.copyfile(restored_cert, private / "cert.crt")
+            shutil.copyfile(restored_key, private / "key.pem")
+            haos_defaults.sync_automodpack_identity(world)
+            self.assertEqual(canon.read_bytes(), original)
+            self.assertTrue((private / "cert.crt").is_symlink())
+            self.assertEqual((private / "cert.crt").resolve(), canon.resolve())
+            self.assertEqual(
+                haos_defaults.automodpack_tls_fingerprint(world),
+                _fingerprint_of(canon),
+            )
+            self.assertNotEqual(_fingerprint_of(restored_cert), _fingerprint_of(canon))
+
+
+def _fingerprint_of(cert: Path) -> str | None:
+    pem = cert.read_text(encoding="utf-8")
+    der = __import__("ssl").PEM_cert_to_DER_cert(pem)
+    digest = __import__("hashlib").sha256(der).hexdigest().upper()
+    return ":".join(digest[i : i + 2] for i in range(0, len(digest), 2))
+
+
+class NonJarUploadTests(unittest.TestCase):
+    def test_guard_refuses_non_jars_and_allows_partials(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            uploaded = root / "worlds" / "World" / "uploaded_mods"
+            uploaded.mkdir(parents=True)
+            os.environ["DATA_DIR"] = str(root / "worlds")
+            os.environ["STATE_DIR"] = str(root / "state")
+            os.environ["MOD_PUBLISHER_DIR"] = str(root / "publisher")
+            Path(os.environ["STATE_DIR"]).mkdir(exist_ok=True)
+            notes = uploaded / "readme.txt"
+            notes.write_text("junk\n", encoding="utf-8")
+            partial = uploaded / "cool_creepers.jar.partial"
+            partial.write_bytes(b"tmp")
+            dot = uploaded / ".prologue.html"
+            dot.write_text("banner\n", encoding="utf-8")
+            fingerprint = uploaded / "AUTOMODPACK-FINGERPRINT.txt"
+            fingerprint.write_text("keep\n", encoding="utf-8")
+            err = io.StringIO()
+            with patch.object(sys, "stderr", err):
+                self.assertEqual(publish_mod.guard_upload(notes), 2)
+                self.assertEqual(publish_mod.guard_upload(uploaded / "shot.png"), 2)
+                self.assertEqual(publish_mod.guard_upload(partial), 0)
+                self.assertEqual(publish_mod.guard_upload(dot), 0)
+            self.assertIn("only .jar", err.getvalue())
+            self.assertIn("readme.txt", err.getvalue())
+            self.assertTrue(notes.is_file())
+            self.assertTrue(partial.is_file())
+
+    def test_after_upload_quarantines_non_jars_and_keeps_fingerprint(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            uploaded = root / "worlds" / "World" / "uploaded_mods"
+            uploaded.mkdir(parents=True)
+            os.environ["DATA_DIR"] = str(root / "worlds")
+            os.environ["STATE_DIR"] = str(root / "state")
+            os.environ["MOD_PUBLISHER_DIR"] = str(root / "publisher")
+            Path(os.environ["STATE_DIR"]).mkdir(exist_ok=True)
+            notes = uploaded / "readme.txt"
+            notes.write_text("junk\n", encoding="utf-8")
+            slipped = uploaded / "notes.md"
+            slipped.write_text("also junk\n", encoding="utf-8")
+            partial = uploaded / "cool.jar.partial"
+            partial.write_bytes(b"tmp")
+            fingerprint = uploaded / "AUTOMODPACK-FINGERPRINT.txt"
+            fingerprint.write_text("keep\n", encoding="utf-8")
+            err = io.StringIO()
+            with patch.object(sys, "stderr", err):
+                self.assertEqual(publish_mod.publish_paths([notes]), 1)
+            self.assertFalse(notes.exists())
+            self.assertFalse(slipped.exists())
+            self.assertTrue(partial.is_file())
+            self.assertEqual(fingerprint.read_text(encoding="utf-8"), "keep\n")
+            quarantine = root / "publisher" / "quarantine"
+            self.assertEqual((quarantine / "readme.txt").read_text(encoding="utf-8"), "junk\n")
+            self.assertEqual((quarantine / "notes.md").read_text(encoding="utf-8"), "also junk\n")
+            self.assertIn("only .jar", err.getvalue())
+            self.assertIn("readme.txt", err.getvalue())
 
 
 if __name__ == "__main__":

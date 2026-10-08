@@ -29,18 +29,47 @@ world_catalog:
   glob: "{data_dir}/*"
   name_from: directory
   caption_file: profile.json
-  caption_json_path: loader
+  caption_json_path: caption
+# Static on purpose: the supervisor already renders select options from this
+# file, so a new Minecraft release is an add-on release rather than a
+# supervisor feature. Every entry has a stable Fabric build and a stable
+# NeoForge build (checked October 2026). Default matches the old
+# Configuration pin so a brand-new "World" profile stays on 1.21.1.
 world_create:
   fields:
-    - id: mod_loader
+    - id: minecraft_version
       kind: select
-      label: Mod loader
-      default: neoforge
+      label: Minecraft version
+      default: "1.21.1"
       options:
-        - value: neoforge
-          label: NeoForge
-        - value: fabric
-          label: Fabric
+        - value: "26.2"
+          label: "26.2"
+        - value: "26.1.2"
+          label: "26.1.2"
+        - value: "1.21.11"
+          label: "1.21.11"
+        - value: "1.21.10"
+          label: "1.21.10"
+        - value: "1.21.8"
+          label: "1.21.8"
+        - value: "1.21.5"
+          label: "1.21.5"
+        - value: "1.21.4"
+          label: "1.21.4"
+        - value: "1.21.3"
+          label: "1.21.3"
+        - value: "1.21.1"
+          label: "1.21.1"
+        - value: "1.21"
+          label: "1.21"
+        - value: "1.20.6"
+          label: "1.20.6"
+        - value: "1.20.4"
+          label: "1.20.4"
+        - value: "1.20.2"
+          label: "1.20.2"
+        - value: "1.20.1"
+          label: "1.20.1"
 world_prepare:
   when: missing
   timeout_seconds: 180

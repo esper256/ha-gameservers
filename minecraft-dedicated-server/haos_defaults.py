@@ -19,6 +19,8 @@ from pathlib import Path
 from typing import Any
 from urllib.request import Request, urlopen
 
+from mod_scan import scan_mods
+
 HELPER = Path("/opt/mc-image-helper/bin/mc-image-helper")
 STARTER_JAR = Path("/opt/server-starter.jar")
 PROTECTED_MOD_IDS = frozenset(
@@ -36,7 +38,11 @@ SEALED_MODE = 0o444
 UPLOADED_MODS = "uploaded_mods"
 MODS_SNAPSHOT = "mods"
 AUTOMODPACK_CERT_REL = Path("automodpack") / ".private" / "cert.crt"
+AUTOMODPACK_KEY_REL = Path("automodpack") / ".private" / "key.pem"
 AUTOMODPACK_FINGERPRINT_NAME = "AUTOMODPACK-FINGERPRINT.txt"
+# Outside every world folder. World backups restore automodpack/.private;
+# the next prepare/boot points that folder back at this pair.
+IDENTITY_DIR_NAME = "automodpack-identity"
 
 
 class MinecraftPinError(RuntimeError):
@@ -116,119 +122,53 @@ def _normalize_loader_pin(raw: object, *, kind: str) -> str:
     return text
 
 
-def minecraft_pin_source() -> tuple[str, str]:
-    """Desired pin: HA options.json. Compose env only if that file is absent."""
-
-    path = options_path()
-    if path.is_file():
-        data, err = _read_options_file()
-        if err:
-            raise MinecraftPinError(f"Cannot read Minecraft pin from {path}: {err}")
-        version = _normalize_mc_version(data.get("minecraft_version"))
-        if not version:
-            raise MinecraftPinError(
-                f"minecraft_version missing or invalid in {path}: "
-                f"{data.get('minecraft_version')!r}"
-            )
-        return version, str(path)
-    env = _normalize_mc_version(os.environ.get("MINECRAFT_VERSION"))
-    if env:
-        return env, "MINECRAFT_VERSION (no options.json)"
-    raise MinecraftPinError(
-        f"No Minecraft pin: {path} is missing and MINECRAFT_VERSION is unset"
-    )
+# New worlds that never went through the picker, and upgrades that have no
+# install to copy, use the same default as the New world form.
+DEFAULT_MINECRAFT_VERSION = "1.21.1"
+# Package install is a marker only. Each world downloads its own server.
+PACKAGE_VERSION = "per-world"
+LOADER_CAPTIONS = {
+    "vanilla": "Vanilla",
+    "fabric": "Fabric",
+    "neoforge": "NeoForge",
+}
+_VANILLA_MANIFEST = "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json"
 
 
-def minecraft_version() -> str:
-    """HA Configuration pin from options.json (compose env if that file is absent)."""
+def install_id_minecraft_version(install_id: str) -> str:
+    """Minecraft release encoded in an install folder suffix (``1.21.1`` or ``1.21.1-beta``)."""
 
-    return minecraft_pin_source()[0]
-
-
-def explain_minecraft_pin() -> str:
-    version, source = minecraft_pin_source()
-    return f"Minecraft pin {version} from {source}"
+    mc, _sep, _pin = str(install_id or "").partition("-")
+    return _normalize_mc_version(mc)
 
 
-def _loader_pin_from_options(key: str, *, kind: str) -> tuple[str, str]:
-    """Loader pin from options.json only. Missing/empty is latest."""
+def caption_for(version: str, loader: str) -> str:
+    label = LOADER_CAPTIONS.get(loader, loader)
+    return f"{version} · {label}"
+
+
+def legacy_configuration_version() -> str:
+    """Old global ``minecraft_version`` option, if a previous install still has it.
+
+    A missing key is not an error. A present but invalid value, or a broken
+    options file, still fails so a world is not pinned to a guess.
+    """
 
     path = options_path()
     if not path.is_file():
-        return "latest", f"default latest (no {path.name})"
+        return ""
     data, err = _read_options_file()
     if err:
-        raise MinecraftPinError(f"Cannot read {key} from {path}: {err}")
-    if key not in data:
-        return "latest", f"default latest ({path})"
-    raw = data.get(key)
-    if str(raw or "").strip() == "":
-        return "latest", f"default latest ({path})"
-    pin = _normalize_loader_pin(raw, kind=kind)
-    if not pin:
-        raise MinecraftPinError(f"{key} missing or invalid in {path}: {raw!r}")
-    return pin, str(path)
-
-
-def neoforge_version() -> str:
-    """HA NeoForge pin: latest, beta, or an exact id (example 21.11.10-beta)."""
-
-    return _loader_pin_from_options("neoforge_version", kind="neoforge")[0]
-
-
-def fabric_loader_version() -> str:
-    """HA Fabric loader pin: latest, or an exact loader id."""
-
-    return _loader_pin_from_options("fabric_loader_version", kind="fabric")[0]
-
-
-def loader_pin(loader: str) -> str:
-    if loader == "fabric":
-        return fabric_loader_version()
-    return neoforge_version()
-
-
-def desired_install_id(loader: str, mc_version: str | None = None) -> str:
-    """Folder suffix after ``{loader}-``: MC version, plus pin when not latest."""
-
-    mc = mc_version if mc_version is not None else minecraft_version()
-    pin = loader_pin(loader)
-    if pin == "latest":
-        return mc
-    return f"{mc}-{pin}"
-
-
-def explain_loader_pins() -> str:
-    neo, neo_src = _loader_pin_from_options("neoforge_version", kind="neoforge")
-    fabric, fabric_src = _loader_pin_from_options(
-        "fabric_loader_version", kind="fabric"
-    )
-    return (
-        f"NeoForge pin {neo} from {neo_src}; "
-        f"Fabric loader pin {fabric} from {fabric_src}"
-    )
-
-
-def loaders_ready_token() -> str:
-    return (
-        f"{minecraft_version()} "
-        f"fabric={fabric_loader_version()} "
-        f"neoforge={neoforge_version()}"
-    )
-
-
-def loaders_ready_matches(marker_text: str) -> bool:
-    text = (marker_text or "").strip()
-    if text == loaders_ready_token():
-        return True
-    mc = minecraft_version()
-    if (
-        text == mc
-        and fabric_loader_version() == "latest"
-        and neoforge_version() == "latest"
-    ):
-        return True
-    return False
+        raise MinecraftPinError(f"Cannot read options from {path}: {err}")
+    if "minecraft_version" not in data:
+        return ""
+    version = _normalize_mc_version(data.get("minecraft_version"))
+    if not version:
+        raise MinecraftPinError(
+            f"minecraft_version missing or invalid in {path}: "
+            f"{data.get('minecraft_version')!r}"
+        )
+    return version
 
 
 def install_dir() -> Path:
@@ -304,7 +244,7 @@ def automodpack_fingerprint_text(fingerprint: str) -> str:
         f"{fingerprint}\n"
         "\n"
         "This is public (the hash of the server cert). Same value for "
-        "every player. It is not a password.\n"
+        "every world and every player. It is not a password.\n"
     )
 
 
@@ -338,6 +278,167 @@ def write_automodpack_fingerprint_file(
             pass
         return None
     return dest
+
+
+def identity_dir() -> Path:
+    """Canonical AutoModpack cert+key. Not inside a world, not on the upload page."""
+
+    override = os.environ.get("AUTOMODPACK_IDENTITY_DIR")
+    if override:
+        return Path(override)
+    return worlds_dir().parent / IDENTITY_DIR_NAME
+
+
+def _identity_files() -> tuple[Path, Path]:
+    root = identity_dir()
+    return root / "cert.crt", root / "key.pem"
+
+
+def _world_identity_files(directory: Path) -> tuple[Path, Path]:
+    return directory / AUTOMODPACK_CERT_REL, directory / AUTOMODPACK_KEY_REL
+
+
+def _pair_ready(cert: Path, key: Path) -> bool:
+    try:
+        return (
+            cert.is_file()
+            and key.is_file()
+            and cert.stat().st_size > 0
+            and key.stat().st_size > 0
+        )
+    except OSError:
+        return False
+
+
+def _copy_identity_file(src: Path, dest: Path, mode: int) -> None:
+    data = src.read_bytes()
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_name(dest.name + ".tmp")
+    tmp.write_bytes(data)
+    os.chmod(tmp, mode)
+    os.replace(tmp, dest)
+    os.chmod(dest, mode)
+
+
+def _install_canonical_from(source: Path) -> None:
+    src_cert, src_key = _world_identity_files(source)
+    canon_cert, canon_key = _identity_files()
+    root = canon_cert.parent
+    root.mkdir(parents=True, exist_ok=True)
+    os.chmod(root, 0o700)
+    _copy_identity_file(src_cert, canon_cert, 0o644)
+    _copy_identity_file(src_key, canon_key, 0o600)
+
+
+def _force_symlink(src: Path, dest: Path) -> bool:
+    """Point dest at src. Replaces a restored regular file. True if it changed."""
+
+    target = src.resolve()
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if dest.is_symlink():
+        try:
+            if dest.resolve() == target:
+                return False
+        except OSError:
+            pass
+    tmp = dest.with_name(f".{dest.name}.link")
+    if tmp.is_symlink() or tmp.exists():
+        tmp.unlink()
+    tmp.symlink_to(target)
+    os.replace(tmp, dest)
+    return True
+
+
+def _world_used_at(directory: Path) -> float:
+    """Prefer a boot/golden session over the cert's own mtime."""
+
+    for name in ("boot.json", "golden.json"):
+        path = directory / name
+        try:
+            if path.is_file():
+                return path.stat().st_mtime
+        except OSError:
+            pass
+    cert, _key = _world_identity_files(directory)
+    try:
+        if cert.is_file():
+            return cert.stat().st_mtime
+    except OSError:
+        pass
+    try:
+        return directory.stat().st_mtime
+    except OSError:
+        return 0.0
+
+
+def _worlds_with_identity() -> list[Path]:
+    root = worlds_dir()
+    if not root.is_dir():
+        return []
+    found: list[Path] = []
+    for child in root.iterdir():
+        if not child.is_dir():
+            continue
+        cert, key = _world_identity_files(child)
+        if _pair_ready(cert, key):
+            found.append(child)
+    return found
+
+
+def _adoption_source() -> Path | None:
+    """Active world's pair, else the most recently used world that has one."""
+
+    found = _worlds_with_identity()
+    if not found:
+        return None
+    active = profile_dir().resolve()
+    for directory in found:
+        try:
+            if directory.resolve() == active:
+                return directory
+        except OSError:
+            continue
+    return max(found, key=_world_used_at)
+
+
+def sync_automodpack_identity(directory: Path) -> None:
+    """Make this world use the one shared AutoModpack cert and key.
+
+    AutoModpack 4.0.6 generates ``cert.crt`` and ``key.pem`` only when either
+    file is missing, and it reads them through ``File`` / ``Files.exists``,
+    which follow symlinks. A symlink is enough to stop it minting a new pair.
+
+    A world backup can restore an old per-world pair. That pair is replaced
+    with symlinks on the next prepare/boot. The canonical files are never
+    overwritten once they exist.
+    """
+
+    directory.mkdir(parents=True, exist_ok=True)
+    canon_cert, canon_key = _identity_files()
+    if not _pair_ready(canon_cert, canon_key):
+        source = _adoption_source()
+        if source is not None:
+            _install_canonical_from(source)
+            print(
+                "Adopted AutoModpack certificate from "
+                f"{source.name} into {canon_cert.parent} "
+                "(shared by every world)",
+                flush=True,
+            )
+    if not _pair_ready(canon_cert, canon_key):
+        return
+    world_cert, world_key = _world_identity_files(directory)
+    changed = _force_symlink(canon_cert, world_cert)
+    changed = _force_symlink(canon_key, world_key) or changed
+    try:
+        os.chmod(world_cert.parent, 0o700)
+    except OSError:
+        pass
+    if changed:
+        print(
+            f"World {directory.name} uses the shared AutoModpack certificate",
+            flush=True,
+        )
 
 
 def _is_partial_name(name: str) -> bool:
@@ -517,9 +618,12 @@ def write_json(path: Path, payload: dict[str, Any]) -> None:
 
 
 def cmd_print_version() -> int:
-    print(explain_minecraft_pin(), file=sys.stderr, flush=True)
-    print(explain_loader_pins(), file=sys.stderr, flush=True)
-    print(minecraft_version(), flush=True)
+    print(
+        "Minecraft version is pinned on each world; this package marker does not select one",
+        file=sys.stderr,
+        flush=True,
+    )
+    print(PACKAGE_VERSION, flush=True)
     return 0
 
 
@@ -560,64 +664,37 @@ def helper_server_entry(install: Path) -> Path | None:
     return path
 
 
-def fabric_install_args(output: Path, *, mc_version: str, pin: str) -> list[str]:
-    args = [
+def fabric_install_args(output: Path, *, mc_version: str) -> list[str]:
+    """Fabric Loader latest for this Minecraft version (no loader pin)."""
+
+    return [
         "install-fabric-loader",
         f"--minecraft-version={mc_version}",
         f"--output-directory={output}",
         f"--results-file={_results_file(output)}",
     ]
-    if pin != "latest":
-        args.append(f"--loader-version={pin}")
-    return args
 
 
-def neoforge_install_args(output: Path, *, mc_version: str, pin: str) -> list[str]:
+def neoforge_install_args(output: Path, *, mc_version: str) -> list[str]:
+    """Newest NeoForge build for this Minecraft version."""
+
     return [
         "install-neoforge",
         f"--minecraft-version={mc_version}",
-        f"--neoforge-version={pin}",
+        "--neoforge-version=latest",
         f"--output-directory={output}",
         f"--results-file={_results_file(output)}",
     ]
 
 
 def cmd_install() -> int:
-    version = minecraft_version()
-    fabric_pin = fabric_loader_version()
-    neo_pin = neoforge_version()
-    print(explain_minecraft_pin(), flush=True)
-    print(explain_loader_pins(), flush=True)
+    """Mark the package ready. Loader jars are installed per world at boot."""
+
     root = install_dir()
     root.mkdir(parents=True, exist_ok=True)
-    fabric = install_tree("fabric", desired_install_id("fabric", version))
-    neoforge = install_tree("neoforge", desired_install_id("neoforge", version))
     marker = root / ".loaders_ready"
-    marker_text = ""
-    if marker.is_file():
-        try:
-            marker_text = marker.read_text(encoding="utf-8")
-        except OSError:
-            marker_text = ""
-    if (
-        loaders_ready_matches(marker_text)
-        and fabric.is_dir()
-        and neoforge.is_dir()
-        and _results_file(fabric).is_file()
-        and _results_file(neoforge).is_file()
-    ):
-        if STARTER_JAR.is_file() and not (neoforge / "server.jar").exists():
-            shutil.copy2(STARTER_JAR, neoforge / "server.jar")
-        print(version, flush=True)
-        return 0
-    fabric.mkdir(parents=True, exist_ok=True)
-    neoforge.mkdir(parents=True, exist_ok=True)
-    _run_helper(fabric_install_args(fabric, mc_version=version, pin=fabric_pin))
-    _run_helper(neoforge_install_args(neoforge, mc_version=version, pin=neo_pin))
-    if STARTER_JAR.is_file():
-        shutil.copy2(STARTER_JAR, neoforge / "server.jar")
-    marker.write_text(f"{loaders_ready_token()}\n", encoding="utf-8")
-    print(version, flush=True)
+    marker.write_text(f"{PACKAGE_VERSION}\n", encoding="utf-8")
+    print(PACKAGE_VERSION, flush=True)
     return 0
 
 
@@ -636,37 +713,113 @@ def _consume_world_create(directory: Path) -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
+def resolve_world_version(
+    directory: Path, created: dict[str, Any] | None = None
+) -> str:
+    """Return this world's pinned Minecraft version, writing it the first time.
+
+    A stored ``profile.json`` version always wins. Nothing else — Configuration,
+    ``MINECRAFT_VERSION``, or an add-on update — may replace it.
+    """
+
+    directory.mkdir(parents=True, exist_ok=True)
+    profile = read_profile(directory)
+    stored = _normalize_mc_version(profile.get("minecraft_version"))
+    if stored:
+        return stored
+    chosen = ""
+    source = ""
+    if created:
+        chosen = _normalize_mc_version(created.get("minecraft_version"))
+        if chosen:
+            source = "new world"
+    if not chosen:
+        current = current_install(directory)
+        if current:
+            chosen = install_id_minecraft_version(current[1])
+            if chosen:
+                source = f"current install {current[0]}-{current[1]}"
+    if not chosen:
+        from golden_boot import load_golden_install
+
+        ref = load_golden_install(directory)
+        if ref:
+            chosen = install_id_minecraft_version(ref[1])
+            if chosen:
+                source = f"last proven install {ref[0]}-{ref[1]}"
+    if not chosen:
+        chosen = legacy_configuration_version()
+        if chosen:
+            source = f"previous Configuration pin {options_path()}"
+    if not chosen:
+        chosen = _normalize_mc_version(os.environ.get("MINECRAFT_VERSION"))
+        if chosen:
+            source = "MINECRAFT_VERSION"
+    if not chosen:
+        chosen = DEFAULT_MINECRAFT_VERSION
+        source = "default for a new world"
+    profile["minecraft_version"] = chosen
+    write_json(directory / "profile.json", profile)
+    print(f"Pinned this world to Minecraft {chosen} ({source})", flush=True)
+    return chosen
+
+
+def apply_world_loader(
+    directory: Path, created: dict[str, Any] | None = None
+) -> str | None:
+    """Pin the version, detect the loader, and seed AutoModpack when needed.
+
+    Returns an error string when the world must not start. The pinned version
+    is kept even when the mods are refused.
+    """
+
+    version = resolve_world_version(directory, created)
+    uploaded = uploaded_mods_dir(directory)
+    uploaded.mkdir(parents=True, exist_ok=True)
+    scan = scan_mods(uploaded, version)
+    for warning in scan.warnings:
+        print(f"Warning: {warning}", file=sys.stderr, flush=True)
+    if scan.errors:
+        return "\n".join(scan.errors)
+    loader = scan.loader
+    profile = read_profile(directory)
+    previous = str(profile.get("loader") or "").strip().lower()
+    profile["minecraft_version"] = version
+    profile["loader"] = loader
+    profile["caption"] = caption_for(version, loader)
+    write_json(directory / "profile.json", profile)
+    if loader == "vanilla" or (previous and previous != loader):
+        _clear_seeded_infrastructure(directory)
+    if loader in {"fabric", "neoforge"}:
+        _seed_infrastructure(directory, loader, version)
+    elif loader != "vanilla":
+        return f"Refusing to start: unsupported loader {loader!r}"
+    print(
+        f"World Minecraft {version} loader {loader} ({profile['caption']})",
+        flush=True,
+    )
+    return None
+
+
 def cmd_prepare_world() -> int:
     directory = profile_dir()
     directory.mkdir(parents=True, exist_ok=True)
     created = _consume_world_create(directory)
-    profile = read_profile(directory)
-    loader = str(
-        created.get("mod_loader")
-        or profile.get("loader")
-        or "neoforge"
-    ).strip().lower()
-    if loader not in {"neoforge", "fabric"}:
-        loader = "neoforge"
-    version = minecraft_version()
-    install_id = desired_install_id(loader, version)
-    print(explain_minecraft_pin(), flush=True)
-    print(explain_loader_pins(), flush=True)
-    write_json(directory / "profile.json", {"loader": loader})
     (directory / "world").mkdir(parents=True, exist_ok=True)
     (directory / "config").mkdir(parents=True, exist_ok=True)
     migrate_legacy_mods(directory)
     uploaded_mods_dir(directory).mkdir(parents=True, exist_ok=True)
+    sync_automodpack_identity(directory)
+    error = apply_world_loader(directory, created)
     eula = env_or_option("eula", "true").lower() in {"1", "true", "yes", "on"}
     (directory / "eula.txt").write_text(
         f"eula={'true' if eula else 'false'}\n", encoding="utf-8"
     )
     _write_server_properties(directory)
-    current = current_install(directory)
-    if current is not None and current != (loader, install_id):
-        _clear_seeded_infrastructure(directory)
-    _seed_infrastructure(directory, loader, version)
     cmd_write_copyparty_banner()
+    if error:
+        print(error, file=sys.stderr, flush=True)
+        return 1
     return 0
 
 
@@ -823,10 +976,10 @@ def install_tree(loader: str, version: str) -> Path:
 
 
 def parse_install_ref(path: Path) -> tuple[str, str] | None:
-    """Read loader + install id (``neoforge-1.21.1`` or ``neoforge-1.21.11-beta``)."""
+    """Read loader + install id (``neoforge-1.21.1`` or legacy ``neoforge-1.21.11-beta``)."""
 
     name = path.name
-    for loader in ("neoforge", "fabric"):
+    for loader in ("neoforge", "fabric", "vanilla"):
         prefix = f"{loader}-"
         if not name.startswith(prefix):
             continue
@@ -836,6 +989,8 @@ def parse_install_ref(path: Path) -> tuple[str, str] | None:
             continue
         if not sep:
             return loader, mc
+        if loader == "vanilla":
+            continue
         kind = "neoforge" if loader == "neoforge" else "fabric"
         if not _normalize_loader_pin(pin, kind=kind):
             continue
@@ -873,7 +1028,92 @@ def install_tree_ready(loader: str, version: str) -> bool:
         return False
     if loader == "fabric":
         return helper_server_entry(install) is not None or (install / "server.jar").exists()
-    return (install / "server.jar").exists() or (install / "run.sh").exists()
+    if loader == "vanilla":
+        jar = install / "server.jar"
+        try:
+            return jar.is_file() and jar.stat().st_size > 0
+        except OSError:
+            return False
+    if loader == "neoforge":
+        return (install / "server.jar").exists() or (install / "run.sh").exists()
+    return False
+
+
+def _fetch_json(url: str) -> Any:
+    req = Request(url, headers={"User-Agent": "haos-minecraft-addon"})
+    with urlopen(req, timeout=30) as resp:  # noqa: S310
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def _install_vanilla(version: str) -> None:
+    dest = install_tree("vanilla", version)
+    dest.mkdir(parents=True, exist_ok=True)
+    manifest = _fetch_json(_VANILLA_MANIFEST)
+    versions = manifest.get("versions") if isinstance(manifest, dict) else None
+    meta_url = ""
+    if isinstance(versions, list):
+        for item in versions:
+            if isinstance(item, dict) and str(item.get("id") or "") == version:
+                meta_url = str(item.get("url") or "")
+                break
+    if not meta_url:
+        raise MinecraftPinError(f"No vanilla server manifest for Minecraft {version}")
+    meta = _fetch_json(meta_url)
+    downloads = meta.get("downloads") if isinstance(meta, dict) else None
+    server = downloads.get("server") if isinstance(downloads, dict) else None
+    jar_url = str(server.get("url") or "") if isinstance(server, dict) else ""
+    if not jar_url:
+        raise MinecraftPinError(f"No vanilla server jar for Minecraft {version}")
+    _seed_jar(jar_url, dest / "server.jar")
+    _results_file(dest).write_text("SERVER=server.jar\n", encoding="utf-8")
+
+
+def ensure_loader_install(loader: str, version: str) -> bool:
+    """Download the newest loader (or the vanilla server) for this Minecraft version."""
+
+    if install_tree_ready(loader, version):
+        return True
+    print(
+        f"Installing Minecraft {version} ({loader}) into {install_dir()}…",
+        file=sys.stderr,
+        flush=True,
+    )
+    try:
+        if loader == "vanilla":
+            _install_vanilla(version)
+        elif loader == "fabric":
+            dest = install_tree("fabric", version)
+            dest.mkdir(parents=True, exist_ok=True)
+            _run_helper(fabric_install_args(dest, mc_version=version))
+        elif loader == "neoforge":
+            dest = install_tree("neoforge", version)
+            dest.mkdir(parents=True, exist_ok=True)
+            _run_helper(neoforge_install_args(dest, mc_version=version))
+            if STARTER_JAR.is_file() and not (dest / "server.jar").exists():
+                shutil.copy2(STARTER_JAR, dest / "server.jar")
+        else:
+            print(f"Unknown install kind {loader}", file=sys.stderr)
+            return False
+    except (
+        OSError,
+        subprocess.CalledProcessError,
+        json.JSONDecodeError,
+        TimeoutError,
+        MinecraftPinError,
+    ) as exc:
+        print(
+            f"Install failed for Minecraft {version} ({loader}): {exc}",
+            file=sys.stderr,
+        )
+        return False
+    if not install_tree_ready(loader, version):
+        print(
+            f"Install tree missing for Minecraft {version} ({loader}): "
+            f"{install_tree(loader, version)}",
+            file=sys.stderr,
+        )
+        return False
+    return True
 
 
 def prepare_game_command() -> list[str] | None:
@@ -892,24 +1132,43 @@ def prepare_game_command() -> list[str] | None:
     )
 
     directory = profile_dir()
+    sync_automodpack_identity(directory)
+    error = apply_world_loader(directory)
+    if error:
+        print(error, file=sys.stderr, flush=True)
+        return None
     profile = read_profile(directory)
-    loader = str(profile.get("loader") or "neoforge").lower()
-    if loader not in {"neoforge", "fabric"}:
-        loader = "neoforge"
-    ha_version = minecraft_version()
-    print(explain_minecraft_pin(), flush=True)
-    print(explain_loader_pins(), flush=True)
-    mode = choose_boot_mode(directory, ha_version=ha_version, loader=loader)
+    loader = str(profile.get("loader") or "vanilla").strip().lower()
+    world_version = _normalize_mc_version(profile.get("minecraft_version"))
+    if loader not in {"vanilla", "fabric", "neoforge"} or not world_version:
+        print(
+            "Refusing to start: world profile is "
+            f"{loader!r} / {profile.get('minecraft_version')!r}",
+            file=sys.stderr,
+        )
+        return None
+    mode = choose_boot_mode(directory, ha_version=world_version, loader=loader)
     golden_ref = load_golden_install(directory) if mode == "golden" else None
     if mode == "golden" and golden_ref is None:
         mode = "attempt"
     if mode == "golden":
         assert golden_ref is not None
         golden_loader, golden_version = golden_ref
-        if not install_tree_ready(golden_loader, golden_version):
+        golden_mc = install_id_minecraft_version(golden_version)
+        if golden_mc != world_version:
+            print(
+                f"Golden snapshot is Minecraft {golden_mc or golden_version}; "
+                f"this world is pinned to {world_version}. "
+                "Not changing the save's Minecraft version.",
+                file=sys.stderr,
+                flush=True,
+            )
+            mode = "attempt"
+            golden_ref = None
+        elif not install_tree_ready(golden_loader, golden_version):
             print(
                 f"Golden install missing ({install_tree(golden_loader, golden_version)}); "
-                f"attempting Minecraft {ha_version} ({loader})",
+                f"attempting Minecraft {world_version} ({loader})",
                 file=sys.stderr,
             )
             mode = "attempt"
@@ -918,7 +1177,7 @@ def prepare_game_command() -> list[str] | None:
         assert golden_ref is not None
         loader, version = golden_ref
         print(
-            f"Boot mode=golden requested={ha_version} launching={version} ({loader})",
+            f"Boot mode=golden requested={world_version} launching={version} ({loader})",
             flush=True,
         )
         _link_install(directory, loader, version)
@@ -933,27 +1192,12 @@ def prepare_game_command() -> list[str] | None:
             proven=True,
         )
     else:
-        version = desired_install_id(loader, ha_version)
+        version = world_version
         print(
             f"Boot mode=attempt launching={version} ({loader})",
             flush=True,
         )
-        if not install_tree_ready(loader, version):
-            print(
-                f"Installing Minecraft {version} ({loader}) into {install_dir()}…",
-                file=sys.stderr,
-            )
-            try:
-                cmd_install()
-            except (OSError, subprocess.CalledProcessError) as exc:
-                print(f"Install failed for Minecraft {version}: {exc}", file=sys.stderr)
-                return None
-        if not install_tree_ready(loader, version):
-            print(
-                f"Install tree missing for Minecraft {version} ({loader}): "
-                f"{install_tree(loader, version)}",
-                file=sys.stderr,
-            )
+        if not ensure_loader_install(loader, version):
             return None
         if should_restage(directory, loader=loader, version=version):
             print(
@@ -1011,7 +1255,8 @@ def prepare_game_command() -> list[str] | None:
     else:
         starter = directory / "server.jar"
         if not starter.exists():
-            print("Missing NeoForge server.jar", file=sys.stderr)
+            label = "vanilla server.jar" if loader == "vanilla" else "NeoForge server.jar"
+            print(f"Missing {label}", file=sys.stderr)
             return None
         cmd += ["-jar", str(starter), "nogui"]
     write_automodpack_fingerprint_file(directory)
@@ -1286,6 +1531,7 @@ def cmd_status_probe() -> int:
         status = minecraft_status_payload("127.0.0.1", game_port)
     except (OSError, json.JSONDecodeError, UnicodeDecodeError, ValueError):
         status = {}
+    sync_automodpack_identity(directory)
     if "ready" in status:
         findings["ready"] = True
         write_automodpack_fingerprint_file(directory)
@@ -1336,6 +1582,9 @@ def cmd_write_copyparty_banner() -> int:
     uploaded = uploaded_mods_dir()
     uploaded.mkdir(parents=True, exist_ok=True)
     _sweep_drop_junk(uploaded)
+    from publish_mod import sweep_uploaded_non_jars
+
+    sweep_uploaded_non_jars(uploaded)
     (uploaded / ".prologue.html").write_text(
         """\
 <div style="max-width:42rem;margin:1rem 0 1.25rem;padding:1rem 1.15rem;\
@@ -1345,16 +1594,18 @@ font-family:sans-serif;line-height:1.45">
   <p style="margin:0.6rem 0 0">This is the <em>upload</em> folder, not the
   running server&rsquo;s copy. Drop a <code>.jar</code> to add or replace
   a mod (same mod id replaces the last build even if the filename is
-  different). Delete a jar to take it off next restart (not AutoModpack).
-  Use a build for this world&rsquo;s Minecraft version and loader
-  (the pin on Configuration, Fabric or NeoForge per world).</p>
+  different). Only <code>.jar</code> files are accepted. Delete a jar to
+  take it off next restart (not AutoModpack).
+  An empty folder runs vanilla. Fabric jars run Fabric, NeoForge jars
+  run NeoForge, for this world&rsquo;s Minecraft version. Do not mix them.</p>
   <p style="margin:0.6rem 0 0">The game keeps the last proven snapshot
-  until a new pin or upload is ready to try. If anyone is playing, it
+  until a new upload is ready to try. If anyone is playing, it
   waits until the last player leaves, then restarts. Then relaunch
   Minecraft if AutoModpack asks.</p>
   <p style="margin:0.6rem 0 0">After the server has started once, copy
   <code>AUTOMODPACK-FINGERPRINT.txt</code> (read-only) and paste it when
-  the Minecraft client warns about mods.</p>
+  the Minecraft client warns about mods. Every world shows the same
+  fingerprint.</p>
 </div>
 """,
         encoding="utf-8",

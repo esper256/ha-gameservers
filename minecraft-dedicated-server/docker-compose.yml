@@ -18,6 +18,8 @@ services:
       DATA_DIR: /data/worlds
       STATE_DIR: /data/supervisor
       WORLD_NAME: World
+      # Only used when a world has no profile.json version yet (fresh volume).
+      # After the first boot the world keeps that version.
       MINECRAFT_VERSION: "1.21.1"
       SERVER_MOTD: A Minecraft Server
       SERVER_SLOTS: "8"

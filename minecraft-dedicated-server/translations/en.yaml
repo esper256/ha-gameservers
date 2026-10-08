@@ -1,16 +1,7 @@
 configuration:
   world_name:
     name: World name
-    description: Default world profile folder (Open Web UI can switch/create more).
-  minecraft_version:
-    name: Minecraft version
-    description: Pinned Java edition version (examples 1.21.1, 1.21.11). Changing this installs that pin beside any previous loader tree.
-  neoforge_version:
-    name: NeoForge version
-    description: latest, beta, or an exact NeoForge id (example 21.11.10-beta). latest is the current stable for this Minecraft version.
-  fabric_loader_version:
-    name: Fabric loader version
-    description: latest, or an exact Fabric loader id (example 0.16.10).
+    description: Default world profile folder (Open Web UI can switch/create more). The first world uses Minecraft 1.21.1 until you create another and pick a version.
   server_motd:
     name: MOTD
     description: Message of the day in server.properties.
@@ -30,29 +21,29 @@ configuration:
     name: Java options
     description: JVM flags (default -Xms2G -Xmx4G).
   update_on_start:
-    name: Install loaders on start
-    description: Run the Fabric/NeoForge installer when the pin is missing or changed.
+    name: Install on start
+    description: Check the add-on install marker at start. Each world's Minecraft version is downloaded when that world boots, and is not changed by an add-on update.
   auto_update_interval_minutes:
     name: Auto-update interval (minutes)
-    description: Keep 0 so Minecraft stays pinned. The pin only changes when you edit Minecraft version.
+    description: Keep 0. A world's Minecraft version changes only when that world is created, or when its profile.json version is edited on purpose.
   auto_update_check_hour:
     name: Daily update check hour
     description: Unused while the interval is 0.
   update_when_empty_only:
     name: Update only when empty
-    description: If a loader reinstall is needed, wait until nobody is online.
+    description: If an install is needed, wait until nobody is online.
   update_on_version_mismatch:
     name: Update on version mismatch
-    description: Leave off; Minecraft is pinned.
+    description: Leave off. Each world keeps the Minecraft version it was created with.
   debug_mode:
     name: Debug mode
     description: Show Ingress log-watch pattern tooling.
   update_window_start_hour:
     name: Update window start hour
-    description: Optional local hour when loader reinstalls may begin.
+    description: Optional local hour when installs may begin.
   update_window_end_hour:
     name: Update window end hour
-    description: Optional local hour when loader reinstalls must stop.
+    description: Optional local hour when installs must stop.
   restart_on_crash:
     name: Restart on crash
     description: Relaunch Minecraft after an unexpected exit.
@@ -67,7 +58,7 @@ configuration:
     description: Daily zip of the active world profile (save + mods).
   backup_on_update:
     name: Backup before update
-    description: Snapshot the profile before a loader reinstall.
+    description: Snapshot the profile before an install.
   backup_retention:
     name: Backup retention
     description: minimal / standard / extended thinning.

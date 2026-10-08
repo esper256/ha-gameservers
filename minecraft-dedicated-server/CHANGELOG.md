@@ -1,5 +1,14 @@
 # Changelog
 
+## 3.16.1
+
+- Each world stores its own Minecraft version, chosen on the New world form. The Configuration options for Minecraft version, NeoForge version, and Fabric loader version are gone. An add-on update does not change a world's version. A world with no stored version keeps the version it already runs (current install, then the last proven snapshot, then the old Configuration pin).
+- The loader is detected from jars in that world's upload folder. An empty folder (ignoring AutoModpack, Fabric API, and the fingerprint file) runs vanilla. Fabric or NeoForge installs the newest loader for that Minecraft version and adds AutoModpack. Mixed loaders, Forge, Quilt-only, and a mod that declares another Minecraft range refuse to start, and the log names the jars. Replacing Fabric mods with NeoForge mods (or the other way) switches the loader on the next boot.
+- The world card shows the pinned version and the detected loader (for example `1.21.1 · Vanilla`).
+- Every world shares one AutoModpack certificate (`/data/automodpack-identity/`). The fingerprint file in each world shows the same value, and the private key is not in the upload folder. An existing world's certificate is kept when that shared pair is first created. A world restore cannot replace it; the next start points the world back at the shared pair.
+- The mod-upload page refuses files that are not `.jar`s. A non-jar that still lands in the folder is moved out. `AUTOMODPACK-FINGERPRINT.txt` stays.
+- The version list is the releases that have both a stable Fabric build and a stable NeoForge build (October 2026). Adding a newer release takes an add-on update.
+
 ## 3.16.0
 
 - No player-facing changes for this game.
